@@ -23,8 +23,6 @@ Bash
 
 npm install
 🛠️ Built With
-React.js (or whatever framework you are using)
-
-Vite / [Webpack]
-
-CSS / Tailwind
+React Native
+Expo
+CSS
