@@ -1,0 +1,468 @@
+import React, { useEffect, useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  ActivityIndicator,
+  Modal,
+  TextInput,
+  ScrollView,
+  Alert,
+} from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { API_BASE, supabase } from "../../api/config";
+import { COLORS, SPACING, RADIUS } from "../../styles/theme";
+import { globalStyles } from "../../styles/global";
+
+// Define the "Dealer's Choice" options
+const GAME_VARIATIONS = [
+  { id: "NLH", name: "Hold'em" },
+  { id: "PLO", name: "Omaha Hi" },
+  { id: "PLO8", name: "Omaha Hi/Lo" },
+  { id: "PINE", name: "Pineapple" },
+  { id: "TUNK", name: "Tunk" },
+  { id: "PYR", name: "Pyramid" },
+  { id: "STUD", name: "7-Card Stud" },
+];
+
+export default function PokerLobby() {
+  const { clubId } = useLocalSearchParams();
+  const router = useRouter();
+
+  const [tables, setTables] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [createModalVisible, setCreateModalVisible] = useState(false);
+  const [isOwner, setIsOwner] = useState(false);
+
+  // Table Configuration State
+  const [tableName, setTableName] = useState("");
+  const [sb, setSb] = useState("1");
+  const [bb, setBb] = useState("2");
+  const [selectedGames, setSelectedGames] = useState(["NLH"]);
+
+  const [isStaff, setIsStaff] = useState(false);
+
+  const fetchTables = async () => {
+    setLoading(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      // 1. Fetch tables (as we did before)
+      const tableRes = await fetch(`${API_BASE}/club/tables/${clubId}`);
+      const tableData = await tableRes.json();
+      setTables(tableData);
+
+      // 2. Fetch club details to check ownership
+      // You'll need an endpoint like GET /api/clubs/:clubId
+      const clubRes = await fetch(`${API_BASE}/clubs/${clubId}`);
+      const clubData = await clubRes.json();
+
+      if (clubData?.members) {
+        const me = clubData.members.find(
+          (m) => m.userId.toString() === user.id.toString()
+        );
+        if (me && (me.role === "owner" || me.role === "manager")) {
+          setIsStaff(true);
+        }
+      }
+
+      if (clubData && clubData.owner_supabase_id === user.id) {
+        setIsOwner(true);
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleGame = (id) => {
+    if (selectedGames.includes(id)) {
+      if (selectedGames.length > 1) {
+        setSelectedGames(selectedGames.filter((g) => g !== id));
+      }
+    } else {
+      setSelectedGames([...selectedGames, id]);
+    }
+  };
+
+  const handleCreateTable = async () => {
+    if (!tableName) return Alert.alert("Required", "Please name the table.");
+
+    // Get the current user's ID from Supabase
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    try {
+      const response = await fetch(`${API_BASE}/club/tables/${clubId}/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: tableName,
+          blinds: { small: parseInt(sb), big: parseInt(bb) },
+          allowedGames: selectedGames,
+          user_supabase_id: user.id, // Pass the ID for security verification
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        setCreateModalVisible(false);
+        fetchTables();
+      } else {
+        // This will catch the 403 "Access Denied" from the server
+        Alert.alert("Permission Denied", result.message);
+      }
+    } catch (error) {
+      Alert.alert("Error", "Could not connect to security server.");
+    }
+  };
+
+  useEffect(() => {
+    fetchTables();
+  }, [clubId]);
+
+  const renderTableItem = ({ item }) => (
+    <TouchableOpacity
+      style={styles.tableCard}
+      onPress={() => router.push(`/clubs/tables/${item._id}`)}
+    >
+      <View style={styles.cardHeader}>
+        <Text style={styles.tableName}>{item.name}</Text>
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>ID: {item._id.slice(-4)}</Text>
+        </View>
+      </View>
+
+      <Text style={styles.blindsText}>
+        Stakes: ${item.blinds?.small}/${item.blinds?.big}
+      </Text>
+
+      <View style={styles.gameTags}>
+        {item.allowedGames?.map((g) => (
+          <View key={g} style={styles.tag}>
+            <Text style={styles.tagText}>{g}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.cardFooter}>
+        <Text style={styles.playerCount}>
+          {item.players?.length || 0}/9 Players
+        </Text>
+        <Text style={styles.joinAction}>TAP TO JOIN ❯</Text>
+      </View>
+    </TouchableOpacity>
+  );
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Text style={styles.backBtnText}>❮ BACK</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>CLUB LOBBY</Text>
+        {isOwner ? (
+          <TouchableOpacity
+            style={styles.createBtn}
+            onPress={() => setCreateModalVisible(true)}
+          >
+            <Text style={styles.createBtnText}>+ TABLE</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 60 }} /> // Placeholder to keep header layout balanced
+        )}
+      </View>
+
+      {loading ? (
+        <ActivityIndicator
+          size="large"
+          color={COLORS.primary}
+          style={{ marginTop: 50 }}
+        />
+      ) : (
+        <FlatList
+          data={tables}
+          keyExtractor={(item) => item._id}
+          renderItem={renderTableItem}
+          contentContainerStyle={{ padding: 20 }}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>
+              No active tables. Create one below!
+            </Text>
+          }
+        />
+      )}
+
+      {/* CREATE TABLE MODAL */}
+      <Modal visible={createModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>CONFIGURE TABLE</Text>
+
+            <TextInput
+              style={styles.input}
+              placeholder="Table Name (e.g. High Stakes)"
+              placeholderTextColor="#444"
+              value={tableName}
+              onChangeText={setTableName}
+            />
+
+            <View style={styles.row}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.label}>Small Blind</Text>
+                <TextInput
+                  style={styles.input}
+                  keyboardType="numeric"
+                  value={sb}
+                  onChangeText={setSb}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Big Blind</Text>
+                <TextInput
+                  style={styles.input}
+                  keyboardType="numeric"
+                  value={bb}
+                  onChangeText={setBb}
+                />
+              </View>
+            </View>
+
+            <Text style={styles.label}>
+              Allowed Games (Dealer's Choice Pool)
+            </Text>
+            <View style={styles.gameGrid}>
+              {GAME_VARIATIONS.map((game) => (
+                <TouchableOpacity
+                  key={game.id}
+                  style={[
+                    styles.gameChip,
+                    selectedGames.includes(game.id) && styles.gameChipActive,
+                  ]}
+                  onPress={() => toggleGame(game.id)}
+                >
+                  <Text
+                    style={[
+                      styles.gameChipText,
+                      selectedGames.includes(game.id) && { color: "#000" },
+                    ]}
+                  >
+                    {game.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity
+              style={styles.confirmBtn}
+              onPress={handleCreateTable}
+            >
+              <Text style={styles.confirmBtnText}>OPEN TABLE</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={() => setCreateModalVisible(false)}>
+              <Text style={styles.cancelText}>CANCEL</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: SPACING.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: "#222",
+  },
+  backBtnText: {
+    color: COLORS.textSecondary,
+    fontWeight: "bold",
+  },
+  headerTitle: {
+    color: COLORS.primary,
+    fontWeight: "900",
+    fontSize: 18,
+    letterSpacing: 2,
+    textTransform: "uppercase",
+  },
+  createBtn: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+  },
+  createBtnText: {
+    color: "#000",
+    fontWeight: "bold",
+  },
+
+  // Table Cards in List
+  tableCard: {
+    backgroundColor: "#151515",
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginBottom: SPACING.md,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.primary, // Highlights the table with the gold theme
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.05)",
+  },
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: SPACING.sm,
+  },
+  tableName: {
+    color: COLORS.textMain,
+    fontSize: 20,
+    fontWeight: "bold",
+  },
+  badge: {
+    backgroundColor: "#222",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: RADIUS.sm,
+  },
+  badgeText: {
+    color: COLORS.textSecondary,
+    fontSize: 10,
+  },
+  blindsText: {
+    color: "#AAA",
+    fontSize: 14,
+    marginBottom: SPACING.md,
+  },
+  gameTags: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginBottom: SPACING.md,
+  },
+  tag: {
+    backgroundColor: "#333",
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 4,
+    borderRadius: RADIUS.sm,
+    marginRight: 6,
+    marginBottom: 6,
+  },
+  tagText: {
+    color: COLORS.primary,
+    fontSize: 10,
+    fontWeight: "bold",
+  },
+  cardFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    borderTopWidth: 1,
+    borderTopColor: "#222",
+    paddingTop: SPACING.sm,
+  },
+  playerCount: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  joinAction: {
+    color: COLORS.primary,
+    fontSize: 12,
+    fontWeight: "900",
+    textTransform: "uppercase",
+  },
+
+  // Create Table Modal
+  modalOverlay: {
+    ...globalStyles.modalOverlay,
+    padding: SPACING.lg,
+  },
+  modalContent: {
+    ...globalStyles.modalBox,
+    width: "100%",
+    padding: 25,
+  },
+  modalTitle: {
+    color: COLORS.textMain,
+    fontSize: 22,
+    fontWeight: "900",
+    textAlign: "center",
+    marginBottom: 20,
+    textTransform: "uppercase",
+  },
+  label: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: "bold",
+    marginBottom: 8,
+    marginTop: SPACING.sm,
+  },
+  input: {
+    backgroundColor: "#000",
+    color: COLORS.textMain,
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: "#222",
+  },
+  gameGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 10,
+  },
+  gameChip: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 8,
+    borderRadius: RADIUS.round, // Pill-style for game types
+    borderWidth: 1,
+    borderColor: "#333",
+    marginRight: 8,
+    marginBottom: 10,
+  },
+  gameChipActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  gameChipText: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  confirmBtn: {
+    backgroundColor: COLORS.primary,
+    padding: 18,
+    borderRadius: RADIUS.md,
+    ...globalStyles.centered,
+    marginTop: SPACING.lg,
+  },
+  confirmBtnText: {
+    color: "#000",
+    fontWeight: "900",
+    fontSize: 16,
+  },
+  cancelText: {
+    color: COLORS.textSecondary,
+    textAlign: "center",
+    marginTop: 20,
+    fontWeight: "bold",
+  },
+  emptyText: {
+    color: "#444",
+    textAlign: "center",
+    marginTop: 50,
+  },
+});
