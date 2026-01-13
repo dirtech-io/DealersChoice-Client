@@ -38,3 +38,22 @@ export const RADIUS = {
   lg: 15,
   round: 100,
 };
+
+export const SIZING = {
+  // Poker Cards
+  cardWidth: 42,
+  cardHeight: 58,
+
+  // Avatars / Player Seats
+  avatarSm: 40,
+  avatarMd: 60,
+  avatarLg: 80,
+
+  // Chips & Markers
+  chipSize: 20,
+  dealerButton: 24,
+
+  // Controls
+  buttonHeight: 48,
+  inputHeight: 50,
+};

@@ -11,7 +11,8 @@ import {
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase, API_BASE } from "../api/config";
-import { COLORS, SIZES } from "../styles/theme";
+// Fixed imports to match your theme.js
+import { COLORS, SPACING, SIZING, RADIUS } from "../styles/theme";
 
 export default function Login() {
   const router = useRouter();
@@ -30,7 +31,6 @@ export default function Login() {
     setLoading(true);
 
     try {
-      // 1. Sign in with Supabase
       const { data: authData, error: authError } =
         await supabase.auth.signInWithPassword({
           email: email,
@@ -45,7 +45,7 @@ export default function Login() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             supabase_id: authData.user.id,
-            email: authData.user.email, // ✅ Added this for the fallback logic
+            email: authData.user.email,
           }),
         });
 
@@ -115,8 +115,15 @@ export default function Login() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  content: { flex: 1, justifyContent: "center", padding: SIZES.padding },
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  content: {
+    flex: 1,
+    justifyContent: "center",
+    padding: SPACING.md, // Changed from SIZES.padding to SPACING.md
+  },
   title: {
     fontSize: 32,
     color: COLORS.primary,
@@ -125,30 +132,44 @@ const styles = StyleSheet.create({
     letterSpacing: 4,
   },
   subtitle: {
-    color: COLORS.textDim,
+    color: COLORS.textSecondary, // Changed from textDim
     textAlign: "center",
     marginBottom: 40,
     fontSize: 14,
     textTransform: "uppercase",
   },
   input: {
-    backgroundColor: COLORS.surface,
+    backgroundColor: "#1a1a1a", // Fallback since 'surface' isn't in theme
     color: COLORS.textMain,
     padding: 15,
-    borderRadius: 8,
+    height: SIZING.inputHeight, // Using your new SIZING
+    borderRadius: RADIUS.md, // Using your RADIUS
     marginBottom: 15,
     borderWidth: 1,
     borderColor: "#333",
   },
   button: {
     backgroundColor: COLORS.primary,
-    padding: 18,
-    borderRadius: 8,
+    height: SIZING.buttonHeight, // Using your new SIZING
+    borderRadius: RADIUS.md,
+    justifyContent: "center",
     alignItems: "center",
     marginTop: 10,
   },
-  buttonText: { color: "#000", fontWeight: "bold", fontSize: 16 },
-  footer: { marginTop: 25 },
-  linkText: { color: COLORS.textDim, textAlign: "center" },
-  linkHighlight: { color: COLORS.primary, fontWeight: "bold" },
+  buttonText: {
+    color: "#000",
+    fontWeight: "bold",
+    fontSize: 16,
+  },
+  footer: {
+    marginTop: 25,
+  },
+  linkText: {
+    color: COLORS.textSecondary, // Changed from textDim
+    textAlign: "center",
+  },
+  linkHighlight: {
+    color: COLORS.primary,
+    fontWeight: "bold",
+  },
 });

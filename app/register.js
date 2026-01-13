@@ -12,14 +12,15 @@ import {
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase, API_BASE } from "../api/config";
-import { COLORS, SIZES } from "../styles/theme";
+// Updated imports to match your theme.js structure
+import { COLORS, SPACING, SIZING, RADIUS } from "../styles/theme";
 
 export default function Register() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
-  const [inviteCode, setInviteCode] = useState(""); // Re-added invite code state
+  const [inviteCode, setInviteCode] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
@@ -31,7 +32,6 @@ export default function Register() {
     setLoading(true);
 
     try {
-      // STEP 1: Create user in Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: email,
         password: password,
@@ -40,7 +40,6 @@ export default function Register() {
       if (authError) throw authError;
 
       if (authData.user) {
-        // STEP 2: Sync with Node server AND process the Invite Code
         const syncResponse = await fetch(`${API_BASE}/auth/sync-profile`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -48,7 +47,7 @@ export default function Register() {
             supabase_id: authData.user.id,
             email: email,
             username: username,
-            inviteCode: inviteCode.trim().toUpperCase(), // Normalize the code
+            inviteCode: inviteCode.trim().toUpperCase(),
           }),
         });
 
@@ -61,7 +60,6 @@ export default function Register() {
           );
           router.replace("/login");
         } else {
-          // If profile sync fails (e.g. invalid invite code), we should warn the user
           throw new Error(syncData.message || "Failed to sync profile");
         }
       }
@@ -136,9 +134,12 @@ export default function Register() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
   scrollContent: {
-    padding: SIZES.padding,
+    padding: SPACING.md, // Fixed from SIZES.padding
     justifyContent: "center",
     flexGrow: 1,
   },
@@ -151,21 +152,31 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   input: {
-    backgroundColor: COLORS.surface,
+    backgroundColor: "#1a1a1a", // Dark background for input
     color: COLORS.textMain,
     padding: 15,
-    borderRadius: 8,
+    height: SIZING.inputHeight, // Using updated SIZING
+    borderRadius: RADIUS.md, // Using updated RADIUS
     marginBottom: 15,
     borderWidth: 1,
     borderColor: "#333",
   },
   button: {
     backgroundColor: COLORS.primary,
-    padding: 18,
-    borderRadius: 8,
+    height: SIZING.buttonHeight, // Using updated SIZING
+    borderRadius: RADIUS.md,
+    justifyContent: "center",
     alignItems: "center",
     marginTop: 10,
   },
-  buttonText: { color: "#000", fontWeight: "bold", fontSize: 16 },
-  linkText: { color: COLORS.textDim, textAlign: "center", marginTop: 20 },
+  buttonText: {
+    color: "#000",
+    fontWeight: "bold",
+    fontSize: 16,
+  },
+  linkText: {
+    color: COLORS.textSecondary, // Changed from textDim to match theme
+    textAlign: "center",
+    marginTop: 20,
+  },
 });
