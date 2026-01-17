@@ -10,6 +10,7 @@ import {
   TextInput,
   Alert,
   Animated,
+  ScrollView,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -17,8 +18,8 @@ import { API_BASE, supabase } from "../../api/config";
 import { COLORS, SPACING, RADIUS } from "../../styles/theme";
 import { globalStyles } from "../../styles/global";
 import { useSocket } from "../../context/SocketContext";
+import BuyInModal from "../../components/BuyInModal";
 
-// Define the "Dealer's Choice" options
 const GAME_VARIATIONS = [
   { id: "NLH", name: "Hold'em" },
   { id: "PLO", name: "Omaha Hi" },
@@ -40,59 +41,44 @@ export default function PokerLobby() {
   const [isOwner, setIsOwner] = useState(false);
   const [isStaff, setIsStaff] = useState(false);
 
-  // Table Configuration State
   const [tableName, setTableName] = useState("");
   const [sb, setSb] = useState("1");
   const [bb, setBb] = useState("2");
   const [selectedGames, setSelectedGames] = useState(["NLH"]);
+  const [minBuyIn, setMinBuyIn] = useState("40");
+  const [maxBuyIn, setMaxBuyIn] = useState("200");
 
-  // Animation for the "Live" dot
+  const [buyInVisible, setBuyInVisible] = useState(false);
+  const [selectedTable, setSelectedTable] = useState(null);
+  const [userClubBalance, setUserClubBalance] = useState(0);
+
   const dotOpacity = useRef(new Animated.Value(1)).current;
 
-  // Start pulsing animation on mount
-  useEffect(() => {
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(dotOpacity, {
-          toValue: 0.2,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(dotOpacity, {
-          toValue: 1,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, []);
-
+  // --- 1. Fetching Logic ---
   const fetchTables = async () => {
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
-      // 1. Fetch tables via REST (Initial Load)
-      const tableRes = await fetch(`${API_BASE}/club/tables/${clubId}`);
+      // FIXED: Route matches clubRoutes.js -> router.get("/:clubId/tables", ...)
+      const tableRes = await fetch(`${API_BASE}/clubs/${clubId}/tables`);
       const tableData = await tableRes.json();
-      setTables(tableData);
+      setTables(Array.isArray(tableData) ? tableData : []);
 
-      // 2. Fetch club details to check ownership/staff status
       const clubRes = await fetch(`${API_BASE}/clubs/${clubId}`);
       const clubData = await clubRes.json();
 
       if (clubData?.members) {
         const me = clubData.members.find(
-          (m) => m.userId.toString() === user.id.toString(),
+          (m) =>
+            m.userId.toString() === user.id.toString() ||
+            m.supabase_id === user.id,
         );
         if (me && (me.role === "owner" || me.role === "manager")) {
           setIsStaff(true);
         }
       }
-
       if (clubData && clubData.owner_supabase_id === user.id) {
         setIsOwner(true);
       }
@@ -105,63 +91,91 @@ export default function PokerLobby() {
 
   useEffect(() => {
     if (!socket || !clubId) return;
-
     fetchTables();
-
-    // Join the specific Club Lobby Room via Socket for live updates
     socket.emit("joinClubLobby", { clubId });
-
-    // Listen for Live Updates (Player counts, new tables, etc.)
     socket.on("clubTablesUpdate", (updatedTables) => {
       setTables(updatedTables);
     });
-
     return () => {
       socket.off("clubTablesUpdate");
       socket.emit("leaveClubLobby", { clubId });
     };
   }, [clubId, socket]);
 
-  const toggleGame = (id) => {
-    if (selectedGames.includes(id)) {
-      if (selectedGames.length > 1) {
-        setSelectedGames(selectedGames.filter((g) => g !== id));
-      }
-    } else {
-      setSelectedGames([...selectedGames, id]);
+  // --- 2. Action Handlers ---
+  const handleTableClick = async (table) => {
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      // FIXED: Route matches clubRoutes.js -> router.get("/:clubId/balance/:supabase_id", ...)
+      const response = await fetch(
+        `${API_BASE}/clubs/${clubId}/balance/${user.id}`,
+      );
+      const data = await response.json();
+
+      setUserClubBalance(data.balance || 0);
+      setSelectedTable(table);
+      setBuyInVisible(true);
+    } catch (error) {
+      Alert.alert("Error", "Could not fetch your club balance.");
     }
   };
 
+  const handleFinalSitDown = (amount) => {
+    setBuyInVisible(false);
+    router.push({
+      pathname: `/clubs/tables/${selectedTable._id}`,
+      params: { buyInAmount: amount },
+    });
+  };
+
   const handleCreateTable = async () => {
-    if (!tableName) return Alert.alert("Required", "Please name the table.");
+    if (!tableName || !minBuyIn || !maxBuyIn)
+      return Alert.alert("Required", "Please fill in all table parameters.");
 
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     try {
-      const response = await fetch(`${API_BASE}/club/tables/${clubId}/create`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: tableName,
-          sb: parseInt(sb),
-          bb: parseInt(bb),
-          allowedGames: selectedGames,
-          user_supabase_id: user.id,
-        }),
-      });
+      // FIXED: Route matches clubRoutes.js -> router.post("/:clubId/tables/create", ...)
+      const response = await fetch(
+        `${API_BASE}/clubs/${clubId}/tables/create`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: tableName,
+            sb: parseInt(sb),
+            bb: parseInt(bb),
+            minBuyIn: parseInt(minBuyIn),
+            maxBuyIn: parseInt(maxBuyIn),
+            allowedGames: selectedGames,
+            user_supabase_id: user.id,
+          }),
+        },
+      );
 
       if (response.ok) {
         setCreateModalVisible(false);
         setTableName("");
-        // Note: The socket broadcast from the server will update the list for us.
       } else {
         const result = await response.json();
-        Alert.alert("Error", result.message);
+        Alert.alert("Error", result.message || "Failed to create table");
       }
     } catch (error) {
       Alert.alert("Error", "Could not connect to server.");
+    }
+  };
+
+  const toggleGame = (id) => {
+    if (selectedGames.includes(id)) {
+      if (selectedGames.length > 1)
+        setSelectedGames(selectedGames.filter((g) => g !== id));
+    } else {
+      setSelectedGames([...selectedGames, id]);
     }
   };
 
@@ -172,7 +186,7 @@ export default function PokerLobby() {
     return (
       <TouchableOpacity
         style={styles.tableCard}
-        onPress={() => router.push(`/clubs/tables/${item._id}`)}
+        onPress={() => handleTableClick(item)}
       >
         <View style={styles.cardHeader}>
           <View style={styles.tableNameContainer}>
@@ -188,10 +202,15 @@ export default function PokerLobby() {
           </View>
         </View>
 
-        <Text style={styles.blindsText}>
-          Stakes: ${item.blinds?.small || item.sb}/$
-          {item.blinds?.big || item.bb}
-        </Text>
+        <View style={styles.statsRow}>
+          <Text style={styles.blindsText}>
+            Stakes: ${item.blinds?.small || item.sb}/$
+            {item.blinds?.big || item.bb}
+          </Text>
+          <Text style={styles.buyinRangeText}>
+            Buy-in: ${item.minBuyIn} - ${item.maxBuyIn}
+          </Text>
+        </View>
 
         <View style={styles.gameTags}>
           {item.allowedGames?.map((g) => (
@@ -216,7 +235,7 @@ export default function PokerLobby() {
           <Text style={styles.backBtnText}>❮ BACK</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>CLUB LOBBY</Text>
-        {isOwner || isStaff ? (
+        {isStaff ? (
           <TouchableOpacity
             style={styles.createBtn}
             onPress={() => setCreateModalVisible(true)}
@@ -237,7 +256,7 @@ export default function PokerLobby() {
       ) : (
         <FlatList
           data={tables}
-          keyExtractor={(item) => item._id}
+          keyExtractor={(item) => item._id || item.id}
           renderItem={renderTableItem}
           contentContainerStyle={{ padding: 20 }}
           ListEmptyComponent={
@@ -248,15 +267,26 @@ export default function PokerLobby() {
         />
       )}
 
-      {/* CREATE TABLE MODAL */}
+      <BuyInModal
+        visible={buyInVisible}
+        onClose={() => setBuyInVisible(false)}
+        onConfirm={handleFinalSitDown}
+        tableMin={selectedTable?.minBuyIn || 0}
+        tableMax={selectedTable?.maxBuyIn || 0}
+        userBalance={userClubBalance}
+      />
+
       <Modal visible={createModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <ScrollView
+            contentContainerStyle={styles.modalContent}
+            showsVerticalScrollIndicator={false}
+          >
             <Text style={styles.modalTitle}>CONFIGURE TABLE</Text>
-
+            <Text style={styles.label}>Table Name</Text>
             <TextInput
               style={styles.input}
-              placeholder="Table Name (e.g. High Stakes)"
+              placeholder="e.g. High Stakes"
               placeholderTextColor="#444"
               value={tableName}
               onChangeText={setTableName}
@@ -283,9 +313,28 @@ export default function PokerLobby() {
               </View>
             </View>
 
-            <Text style={styles.label}>
-              Allowed Games (Dealer's Choice Pool)
-            </Text>
+            <View style={styles.row}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.label}>Min Buy-in ($)</Text>
+                <TextInput
+                  style={styles.input}
+                  keyboardType="numeric"
+                  value={minBuyIn}
+                  onChangeText={setMinBuyIn}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Max Buy-in ($)</Text>
+                <TextInput
+                  style={styles.input}
+                  keyboardType="numeric"
+                  value={maxBuyIn}
+                  onChangeText={setMaxBuyIn}
+                />
+              </View>
+            </View>
+
+            <Text style={styles.label}>Allowed Games Pool</Text>
             <View style={styles.gameGrid}>
               {GAME_VARIATIONS.map((game) => (
                 <TouchableOpacity
@@ -314,11 +363,10 @@ export default function PokerLobby() {
             >
               <Text style={styles.confirmBtnText}>OPEN TABLE</Text>
             </TouchableOpacity>
-
             <TouchableOpacity onPress={() => setCreateModalVisible(false)}>
               <Text style={styles.cancelText}>CANCEL</Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     </SafeAreaView>
@@ -326,10 +374,7 @@ export default function PokerLobby() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
+  container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -338,10 +383,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#222",
   },
-  backBtnText: {
-    color: COLORS.textSecondary,
-    fontWeight: "bold",
-  },
+  backBtnText: { color: COLORS.textSecondary, fontWeight: "bold" },
   headerTitle: {
     color: COLORS.primary,
     fontWeight: "900",
@@ -355,10 +397,7 @@ const styles = StyleSheet.create({
     paddingVertical: SPACING.sm,
     borderRadius: RADIUS.md,
   },
-  createBtnText: {
-    color: "#000",
-    fontWeight: "bold",
-  },
+  createBtnText: { color: "#000", fontWeight: "bold" },
   tableCard: {
     backgroundColor: "#151515",
     borderRadius: RADIUS.lg,
@@ -375,40 +414,30 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: SPACING.sm,
   },
-  tableNameContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
+  tableNameContainer: { flexDirection: "row", alignItems: "center" },
   liveDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: "#4CAF50",
     marginRight: 8,
-    shadowColor: "#4CAF50",
-    shadowRadius: 4,
-    shadowOpacity: 0.8,
   },
-  tableName: {
-    color: COLORS.textMain,
-    fontSize: 20,
-    fontWeight: "bold",
-  },
+  tableName: { color: COLORS.textMain, fontSize: 20, fontWeight: "bold" },
   badge: {
     backgroundColor: "#222",
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: RADIUS.sm,
   },
-  badgeText: {
-    color: COLORS.textSecondary,
-    fontSize: 10,
-  },
-  blindsText: {
-    color: "#AAA",
-    fontSize: 14,
+  badgeText: { color: COLORS.textSecondary, fontSize: 10 },
+  statsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: SPACING.md,
   },
+  blindsText: { color: "#AAA", fontSize: 13 },
+  buyinRangeText: { color: COLORS.primary, fontSize: 12, fontWeight: "bold" },
   gameTags: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -422,11 +451,7 @@ const styles = StyleSheet.create({
     marginRight: 6,
     marginBottom: 6,
   },
-  tagText: {
-    color: COLORS.primary,
-    fontSize: 10,
-    fontWeight: "bold",
-  },
+  tagText: { color: COLORS.primary, fontSize: 10, fontWeight: "bold" },
   cardFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -445,33 +470,22 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     textTransform: "uppercase",
   },
-  modalOverlay: {
-    ...globalStyles.modalOverlay,
-    padding: SPACING.lg,
-  },
-  modalContent: {
-    ...globalStyles.modalBox,
-    width: "100%",
-    padding: 25,
-  },
+  modalOverlay: { ...globalStyles.modalOverlay, padding: SPACING.lg },
+  modalContent: { ...globalStyles.modalBox, width: "100%", padding: 25 },
   modalTitle: {
     color: COLORS.textMain,
     fontSize: 22,
     fontWeight: "900",
     textAlign: "center",
     marginBottom: 20,
-    textTransform: "uppercase",
   },
-  row: {
-    flexDirection: "row",
-    marginVertical: 10,
-  },
+  row: { flexDirection: "row", marginVertical: 5 },
   label: {
     color: COLORS.textSecondary,
     fontSize: 12,
     fontWeight: "bold",
-    marginBottom: 8,
-    marginTop: SPACING.sm,
+    marginBottom: 5,
+    marginTop: 10,
   },
   input: {
     backgroundColor: "#000",
@@ -481,11 +495,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#222",
   },
-  gameGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    marginTop: 10,
-  },
+  gameGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: 10 },
   gameChip: {
     paddingHorizontal: SPACING.md,
     paddingVertical: 8,
@@ -511,20 +521,12 @@ const styles = StyleSheet.create({
     marginTop: SPACING.lg,
     alignItems: "center",
   },
-  confirmBtnText: {
-    color: "#000",
-    fontWeight: "900",
-    fontSize: 16,
-  },
+  confirmBtnText: { color: "#000", fontWeight: "900", fontSize: 16 },
   cancelText: {
     color: COLORS.textSecondary,
     textAlign: "center",
     marginTop: 20,
     fontWeight: "bold",
   },
-  emptyText: {
-    color: "#444",
-    textAlign: "center",
-    marginTop: 50,
-  },
+  emptyText: { color: "#444", textAlign: "center", marginTop: 50 },
 });
