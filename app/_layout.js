@@ -17,6 +17,9 @@ export default function RootLayout() {
     InterRegular: Inter_400Regular,
     InterBold: Inter_700Bold,
   });
+  useEffect(() => {
+    loadPokerSounds();
+  }, []);
 
   useEffect(() => {
     if (fontsLoaded || fontError) {

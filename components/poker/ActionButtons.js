@@ -4,28 +4,38 @@ import Slider from "@react-native-community/slider";
 import { COLORS, SPACING, RADIUS } from "../../styles/theme";
 import { globalStyles } from "../../styles/global";
 
-export default function ActionButtons({ tableData, myPlayer, onAction }) {
+export default function ActionButtons({
+  tableData,
+  myPlayer,
+  onAction,
+  socket,
+}) {
   const [showRaiseMenu, setShowRaiseMenu] = useState(false);
 
-  // 1. MATH CONSTANTS
+  // 1. HELPERS & CONSTANTS
+  const isMyTurn = tableData.actingIndex === myPlayer?.seatIndex;
+  const isShowdown = tableData.currentStreet === "SHOWDOWN";
+
+  // Muck Logic Helpers
+  const isUserInHand = myPlayer && !myPlayer.folded;
+  const isWinner = tableData.lastWinners?.some(
+    (w) => w.seatIndex === myPlayer?.seatIndex
+  );
+
   const currentBet = tableData.currentBet || 0;
-  const minRaiseAmount = tableData.minRaiseAmount || 20; // The 'jump' from server
+  const minRaiseAmount = tableData.minRaiseAmount || 20;
   const myCurrentContribution = myPlayer?.currentStreetBet || 0;
   const playerChips = myPlayer?.chips || 0;
 
-  // Min Raise Total is the current price + the last raise jump
   const minTotalRaise = currentBet + minRaiseAmount;
-  // Max is everything the player has (All-In)
   const maxTotalRaise = playerChips + myCurrentContribution;
 
   const pot = tableData.pot || 0;
   const callAmount = currentBet - myCurrentContribution;
   const isCheck = callAmount <= 0;
 
-  // Local state for the slider
   const [currentRaiseAmount, setCurrentRaiseAmount] = useState(minTotalRaise);
 
-  // Reset slider whenever it's opened or the bet changes
   useEffect(() => {
     setCurrentRaiseAmount(Math.min(minTotalRaise, maxTotalRaise));
   }, [minTotalRaise, maxTotalRaise, showRaiseMenu]);
@@ -36,31 +46,46 @@ export default function ActionButtons({ tableData, myPlayer, onAction }) {
   };
 
   const handleQuickBet = (percent) => {
-    // Poker math: A "Pot" bet usually means Call + the Pot after the call
-    // Simplified: (Pot * percent) + currentBet
     let amount = Math.floor(pot * percent) + currentBet;
-
-    // Clamp between Min Raise and All-In
     amount = Math.max(amount, minTotalRaise);
     amount = Math.min(amount, maxTotalRaise);
     setCurrentRaiseAmount(amount);
   };
 
   const handleTimeBank = () => {
-    socket.emit("useTimeBank", { tableId: tableData.id });
+    socket?.emit("useTimeBank", { tableId: tableData.id });
   };
 
-  const hasTimeBank = myPlayer?.timeBank > 0;
+  const handleMuck = () => {
+    socket?.emit("muckCards", { tableId: tableData.id });
+  };
+
+  // --- RENDER LOGIC ---
+
+  // 1. If it's SHOWDOWN, show the Muck Button if they haven't mucked yet
+  if (isShowdown) {
+    return (
+      <View style={styles.actionContainer}>
+        {isUserInHand && !isWinner && !myPlayer.mucked && (
+          <TouchableOpacity style={styles.muckBtnFull} onPress={handleMuck}>
+            <Text style={styles.btnText}>MUCK CARDS</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  }
+
+  // 2. If it's not the user's turn, show nothing (or spectator mode)
+  if (!isMyTurn) return null;
 
   return (
     <View style={styles.actionContainer}>
       {showRaiseMenu ? (
-        /* --- RAISE MENU (SLIDER & QUICK BETS) --- */
+        /* --- RAISE MENU --- */
         <View style={styles.raiseMenu}>
           <Text style={styles.raiseAmountText}>
             RAISE TO: ${currentRaiseAmount}
           </Text>
-
           <Slider
             style={{ width: "100%", height: 50 }}
             minimumValue={minTotalRaise}
@@ -72,37 +97,20 @@ export default function ActionButtons({ tableData, myPlayer, onAction }) {
             maximumTrackTintColor="#333"
             thumbTintColor={COLORS.raise}
           />
-
           <View style={styles.quickBetRow}>
-            <TouchableOpacity
-              style={styles.quickBtn}
-              onPress={() => handleQuickBet(0.33)}
-            >
-              <Text style={styles.quickBtnText}>1/3</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.quickBtn}
-              onPress={() => handleQuickBet(0.5)}
-            >
-              <Text style={styles.quickBtnText}>1/2</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.quickBtn}
-              onPress={() => handleQuickBet(0.75)}
-            >
-              <Text style={styles.quickBtnText}>3/4</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.quickBtn}
-              onPress={() => handleQuickBet(1)}
-            >
-              <Text style={styles.quickBtnText}>POT</Text>
-            </TouchableOpacity>
+            {["1/3", "1/2", "3/4", "POT"].map((label, idx) => {
+              const vals = [0.33, 0.5, 0.75, 1];
+              return (
+                <TouchableOpacity
+                  key={label}
+                  style={styles.quickBtn}
+                  onPress={() => handleQuickBet(vals[idx])}
+                >
+                  <Text style={styles.quickBtnText}>{label}</Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
-
           <View style={styles.confirmRaiseRow}>
             <TouchableOpacity
               style={styles.backBtn}
@@ -119,16 +127,14 @@ export default function ActionButtons({ tableData, myPlayer, onAction }) {
           </View>
         </View>
       ) : (
-        /* --- STANDARD ACTION BUTTONS --- */
+        /* --- STANDARD ACTIONS --- */
         <View style={styles.buttonRow}>
-          {tableData.actingIndex === myPlayer?.seatIndex && hasTimeBank && (
+          {myPlayer?.timeBank > 0 && (
             <TouchableOpacity
               style={styles.timeBankBtn}
               onPress={handleTimeBank}
             >
-              <Text style={styles.timeBtnText}>
-                TIME ({myPlayer.timeBank}s)
-              </Text>
+              <Text style={styles.timeBtnText}>TIME</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity
@@ -137,7 +143,6 @@ export default function ActionButtons({ tableData, myPlayer, onAction }) {
           >
             <Text style={styles.btnText}>FOLD</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.actionBtn, styles.callBtn]}
             onPress={() => onAction("call")}
@@ -146,14 +151,13 @@ export default function ActionButtons({ tableData, myPlayer, onAction }) {
               {isCheck ? "CHECK" : `CALL $${callAmount}`}
             </Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.actionBtn, styles.raiseBtn]}
             onPress={() => setShowRaiseMenu(true)}
             disabled={playerChips === 0}
           >
             <Text style={styles.btnText}>
-              {tableData.currentBet === 0 ? "BET" : "RAISE"}
+              {currentBet === 0 ? "BET" : "RAISE"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -169,10 +173,7 @@ const styles = StyleSheet.create({
     width: "100%",
     paddingHorizontal: SPACING.md,
   },
-  buttonRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
+  buttonRow: { flexDirection: "row", justifyContent: "space-between" },
   actionBtn: {
     flex: 1,
     height: 55,
@@ -181,100 +182,64 @@ const styles = StyleSheet.create({
     ...globalStyles.centered,
     elevation: 5,
   },
-  foldBtn: { backgroundColor: COLORS.fold || "#d9534f" },
-  callBtn: { backgroundColor: COLORS.call || "#5bc0de" },
-  raiseBtn: { backgroundColor: COLORS.raise || "#5cb85c" },
+  foldBtn: { backgroundColor: "#d9534f" },
+  callBtn: { backgroundColor: "#5bc0de" },
+  raiseBtn: { backgroundColor: "#5cb85c" },
+  muckBtnFull: {
+    backgroundColor: "#666",
+    height: 55,
+    borderRadius: RADIUS.md,
+    ...globalStyles.centered,
+    width: "100%",
+  },
   btnText: {
-    color: COLORS.textMain,
+    color: "#fff",
     fontWeight: "900",
     fontSize: 14,
     textTransform: "uppercase",
   },
   raiseMenu: {
-    backgroundColor: "rgba(0,0,0,0.9)",
+    backgroundColor: "rgba(0,0,0,0.95)",
     borderRadius: RADIUS.lg,
     padding: SPACING.md,
     borderWidth: 1,
     borderColor: "#444",
-    marginBottom: SPACING.sm,
   },
   raiseAmountText: {
     color: "#fff",
     textAlign: "center",
     fontSize: 20,
     fontWeight: "bold",
-    marginBottom: 5,
   },
-  quickBetRow: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginVertical: SPACING.md,
-  },
-  quickBtn: {
-    backgroundColor: "#333",
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    borderRadius: RADIUS.md,
-    minWidth: 80,
-    alignItems: "center",
-  },
-  quickBtnText: {
-    color: COLORS.textMain,
-    fontWeight: "bold",
-    fontSize: 12,
-  },
-  confirmRaiseRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  backBtn: {
-    padding: SPACING.md,
-  },
-  backBtnText: {
-    color: "#aaa",
-    fontWeight: "bold",
-  },
-  confirmRaiseBtn: {
-    flex: 1,
-    backgroundColor: COLORS.raise || "#5cb85c",
-    height: 50,
-    borderRadius: RADIUS.md,
-    ...globalStyles.centered,
-    marginLeft: SPACING.sm,
-  },
+  quickBetRow: { flexDirection: "row", marginVertical: SPACING.md },
   quickBtn: {
     backgroundColor: "#222",
     paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderRadius: RADIUS.sm,
-    flex: 1, // Spread them evenly
+    flex: 1,
     marginHorizontal: 4,
+    borderRadius: RADIUS.sm,
     alignItems: "center",
     borderWidth: 1,
     borderColor: "#444",
-    // Standard "poker app" shadow
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.5,
-    shadowRadius: 2,
   },
-  quickBtnText: {
-    color: COLORS.primary || "#FFD700", // Gold or your primary brand color
-    fontWeight: "800",
-    fontSize: 12,
+  quickBtnText: { color: "#FFD700", fontWeight: "800", fontSize: 12 },
+  confirmRaiseRow: { flexDirection: "row", alignItems: "center" },
+  backBtn: { padding: SPACING.md },
+  backBtnText: { color: "#aaa", fontWeight: "bold" },
+  confirmRaiseBtn: {
+    flex: 1,
+    backgroundColor: "#5cb85c",
+    height: 50,
+    borderRadius: RADIUS.md,
+    ...globalStyles.centered,
   },
   timeBankBtn: {
-    backgroundColor: "#4a90e2", // Blue to distinguish from game actions
-    padding: 10,
-    borderRadius: 5,
-    marginRight: 10,
-    borderWidth: 1,
-    borderColor: "#fff",
+    backgroundColor: "#4a90e2",
+    width: 60,
+    height: 55,
+    borderRadius: RADIUS.md,
+    ...globalStyles.centered,
+    marginRight: 5,
   },
-  timeBtnText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 12,
-  },
+  timeBtnText: { color: "#fff", fontWeight: "bold", fontSize: 10 },
 });

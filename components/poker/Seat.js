@@ -8,8 +8,92 @@ import {
   Dimensions,
 } from "react-native";
 import { COLORS, SPACING, SIZING, RADIUS } from "../../styles/theme";
+import { playSound } from "../../utils/audioManager";
 
 const { width, height } = Dimensions.get("window");
+
+// NEW: Sub-component for individual card animations
+const AnimatedCard = ({ card, index, isHidden }) => {
+  const slideAnim = useRef(new Animated.Value(0)).current; // 0 = dealer, 1 = seat
+  const flipAnim = useRef(new Animated.Value(0)).current; // 0 = back, 1 = front
+
+  useEffect(() => {
+    // 1. Slide from center (Dealer position)
+    setTimeout(() => playSound("cardSlide"), index * 150);
+    Animated.spring(slideAnim, {
+      toValue: 1,
+      delay: index * 150, // Stagger cards
+      useNativeDriver: true,
+      tension: 20,
+      friction: 7,
+    }).start();
+
+    // 2. Flip to show front
+    if (!isHidden) {
+      setTimeout(() => playSound("cardFlip"), index * 150 + 300);
+      Animated.timing(flipAnim, {
+        toValue: 1,
+        duration: 400,
+        delay: index * 150 + 300,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isHidden]);
+
+  const rotateY = flipAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["180deg", "0deg"],
+  });
+
+  const translateY = slideAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-height / 3, 0], // Cards slide down from center area
+  });
+
+  const scale = slideAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.5, 1],
+  });
+
+  return (
+    <Animated.View
+      style={[
+        styles.miniCard,
+        { transform: [{ translateY }, { rotateY }, { scale }] },
+      ]}
+    >
+      {/* FRONT OF CARD */}
+      <Animated.View
+        style={[styles.cardFace, styles.cardFront, { opacity: flipAnim }]}
+      >
+        <Text
+          style={[
+            styles.miniCardText,
+            { color: card.match(/[sh♥♦]/i) ? COLORS.cardSuitRed : "#000" },
+          ]}
+        >
+          {card}
+        </Text>
+      </Animated.View>
+
+      {/* BACK OF CARD */}
+      <Animated.View
+        style={[
+          styles.cardFace,
+          styles.cardBack,
+          {
+            opacity: flipAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [1, 0],
+            }),
+          },
+        ]}
+      >
+        <View style={styles.cardBackPattern} />
+      </Animated.View>
+    </Animated.View>
+  );
+};
 
 export default function Seat({
   index,
@@ -17,7 +101,7 @@ export default function Seat({
   player,
   isDealer,
   isActing,
-  isWinner, // Added missing prop
+  isWinner,
   onPress,
   myHand,
   currentStreet,
@@ -27,7 +111,7 @@ export default function Seat({
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const [timeLeft, setTimeLeft] = useState(30);
 
-  // --- ANIMATION: CHIPS TO CENTER ---
+  // ... (Keep existing Bet Move and Winner Pulse useEffects)
   useEffect(() => {
     if (player?.currentStreetBet > 0) {
       Animated.timing(moveAnim, {
@@ -40,7 +124,6 @@ export default function Seat({
     }
   }, [currentStreet]);
 
-  // --- ANIMATION: WINNER PULSE ---
   useEffect(() => {
     if (isWinner) {
       Animated.loop(
@@ -56,14 +139,13 @@ export default function Seat({
             useNativeDriver: true,
           }),
         ]),
-        { iterations: 6 }
+        { iterations: 6 },
       ).start();
     } else {
       pulseAnim.setValue(1);
     }
   }, [isWinner]);
 
-  // --- TIMER SYNC ---
   useEffect(() => {
     if (isActing && socket) {
       socket.on("turnTimerUpdate", (data) => setTimeLeft(data.timeLeft));
@@ -71,7 +153,6 @@ export default function Seat({
     return () => socket?.off("turnTimerUpdate");
   }, [isActing, socket]);
 
-  // Interpolations for chip movement
   const translateX = moveAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [0, width / 2 - (pos.left ? parseFloat(pos.left) : width / 2)],
@@ -83,9 +164,12 @@ export default function Seat({
   });
 
   const shouldShowCards =
-    myHand || (player?.hand && currentStreet === "SHOWDOWN" && !player.folded);
+    myHand ||
+    (player?.hand &&
+      currentStreet === "SHOWDOWN" &&
+      !player.folded &&
+      !player.mucked);
 
-  // --- RENDER: EMPTY SEAT ---
   if (!player) {
     return (
       <View style={[styles.seatWrapper, pos]}>
@@ -99,10 +183,9 @@ export default function Seat({
     );
   }
 
-  // --- RENDER: OCCUPIED SEAT ---
   return (
     <View style={[styles.seatWrapper, pos]}>
-      {/* 1. BET BUBBLE (Animated) */}
+      {/* 1. BET BUBBLE */}
       {player.currentStreetBet > 0 && (
         <Animated.View
           style={[
@@ -128,27 +211,28 @@ export default function Seat({
       )}
 
       <TouchableOpacity onPress={onPress} disabled={true} activeOpacity={1}>
-        {/* DEALER BUTTON */}
         {isDealer && (
           <View style={styles.dealerButton}>
             <Text style={styles.dealerText}>D</Text>
           </View>
         )}
-
-        {/* WINNER BADGE */}
         {isWinner && (
           <View style={styles.winBadge}>
             <Text style={styles.winBadgeText}>WINNER</Text>
           </View>
         )}
+        {player.mucked && (
+          <View style={styles.muckBadge}>
+            <Text style={styles.muckBadgeText}>MUCKED</Text>
+          </View>
+        )}
 
-        {/* AVATAR CIRCLE (With Pulse Animation) */}
         <Animated.View
           style={[
             styles.seatCircle,
             isWinner && styles.winnerGlow,
             isActing && styles.activeTurnGlow,
-            player?.folded && styles.foldedPlayer,
+            (player?.folded || player?.mucked) && styles.foldedPlayer,
             { transform: [{ scale: pulseAnim }] },
           ]}
         >
@@ -157,35 +241,19 @@ export default function Seat({
           </Text>
         </Animated.View>
 
-        {/* PLAYER INFO CARD */}
         <View style={styles.labelContainer}>
           <Text style={styles.usernameText} numberOfLines={1}>
             {player.username}
           </Text>
           <Text style={styles.chipText}>${player.chips}</Text>
-
-          {player?.timeBank > 0 && (
-            <View style={styles.timeBankIndicator}>
-              <Text style={styles.timeBankLetter}>T</Text>
-            </View>
-          )}
         </View>
       </TouchableOpacity>
 
-      {/* CARDS */}
+      {/* 3. ANIMATED CARDS */}
       {shouldShowCards && (
         <View style={styles.handOverlay}>
           {(myHand || player.hand).map((card, i) => (
-            <View key={i} style={styles.miniCard}>
-              <Text
-                style={[
-                  styles.miniCardText,
-                  { color: card.match(/[HD]/) ? COLORS.cardSuitRed : "#000" },
-                ]}
-              >
-                {card}
-              </Text>
-            </View>
+            <AnimatedCard key={i} card={card} index={i} isHidden={false} />
           ))}
         </View>
       )}
@@ -194,6 +262,7 @@ export default function Seat({
 }
 
 const styles = StyleSheet.create({
+  // ... (Keep existing styles)
   seatWrapper: {
     position: "absolute",
     width: 80,
@@ -201,31 +270,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     transform: [{ translateX: -40 }, { translateY: -50 }],
-  },
-  emptyContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  emptyCircle: {
-    width: 45,
-    height: 45,
-    borderRadius: 25,
-    backgroundColor: "rgba(0,0,0,0.3)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  plusIcon: {
-    color: COLORS.textSecondary,
-    fontSize: 20,
-    fontWeight: "300",
-  },
-  sitText: {
-    color: COLORS.textSecondary,
-    fontSize: 10,
-    marginTop: 4,
-    fontWeight: "bold",
   },
   seatCircle: {
     width: 54,
@@ -238,44 +282,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     zIndex: 2,
   },
-  activeTurnGlow: {
-    borderColor: COLORS.primary,
-    borderWidth: 3,
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  winnerGlow: {
-    borderColor: "#FFD700",
-    borderWidth: 4,
-    shadowColor: "#FFD700",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 15,
-    elevation: 15,
-  },
-  winBadge: {
-    position: "absolute",
-    top: -18,
-    alignSelf: "center",
-    backgroundColor: "#FFD700",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-    zIndex: 40,
-  },
-  winBadgeText: {
-    color: "#000",
-    fontSize: 9,
-    fontWeight: "bold",
-  },
-  avatarText: {
-    color: COLORS.textMain,
-    fontWeight: "bold",
-    fontSize: 20,
-  },
+  avatarText: { color: COLORS.textMain, fontWeight: "bold", fontSize: 20 },
   labelContainer: {
     backgroundColor: COLORS.overlay,
     paddingHorizontal: 8,
@@ -287,16 +294,57 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.1)",
   },
-  usernameText: {
-    color: COLORS.textMain,
-    fontSize: 10,
-    fontWeight: "bold",
+  usernameText: { color: COLORS.textMain, fontSize: 10, fontWeight: "bold" },
+  chipText: { color: COLORS.primary, fontSize: 11, fontWeight: "900" },
+  activeTurnGlow: { borderColor: COLORS.primary, borderWidth: 3, elevation: 8 },
+  winnerGlow: { borderColor: "#FFD700", borderWidth: 4, elevation: 15 },
+  winBadge: {
+    position: "absolute",
+    top: -18,
+    alignSelf: "center",
+    backgroundColor: "#FFD700",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    zIndex: 40,
   },
-  chipText: {
-    color: COLORS.primary,
-    fontSize: 11,
-    fontWeight: "900",
+  winBadgeText: { color: "#000", fontSize: 9, fontWeight: "bold" },
+  handOverlay: {
+    flexDirection: "row",
+    position: "absolute",
+    bottom: -10,
+    zIndex: 50,
   },
+
+  // NEW CARD STYLES
+  miniCard: {
+    width: 32,
+    height: 44,
+    marginHorizontal: 2,
+    backfaceVisibility: "hidden", // Crucial for flip effect
+  },
+  cardFace: {
+    position: "absolute",
+    width: "100%",
+    height: "100%",
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cardFront: { backgroundColor: "#FFF" },
+  cardBack: { backgroundColor: COLORS.primaryDark, borderColor: "#fff" },
+  cardBackPattern: {
+    width: "70%",
+    height: "70%",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    borderRadius: 2,
+  },
+  miniCardText: { fontSize: 12, fontWeight: "bold" },
+
+  // ... (Include your other existing styles)
   betBubble: {
     position: "absolute",
     top: -25,
@@ -343,34 +391,23 @@ const styles = StyleSheet.create({
     borderColor: "#999",
   },
   dealerText: { color: "#000", fontSize: 12, fontWeight: "bold" },
-  handOverlay: {
-    flexDirection: "row",
-    position: "absolute",
-    bottom: -10,
-    zIndex: 20,
-  },
-  miniCard: {
-    width: 28,
-    height: 40,
-    backgroundColor: "#FFF",
-    borderRadius: 4,
+  emptyContainer: { alignItems: "center", justifyContent: "center" },
+  emptyCircle: {
+    width: 45,
+    height: 45,
+    borderRadius: 25,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
     justifyContent: "center",
     alignItems: "center",
-    marginHorizontal: 1,
-    elevation: 4,
   },
-  miniCardText: { fontSize: 12, fontWeight: "bold" },
+  plusIcon: { color: COLORS.textSecondary, fontSize: 20, fontWeight: "300" },
+  sitText: {
+    color: COLORS.textSecondary,
+    fontSize: 10,
+    marginTop: 4,
+    fontWeight: "bold",
+  },
   foldedPlayer: { opacity: 0.4 },
-  timeBankIndicator: {
-    position: "absolute",
-    right: -10,
-    top: -5,
-    backgroundColor: COLORS.call,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  timeBankLetter: { color: "#fff", fontSize: 9, fontWeight: "bold" },
 });

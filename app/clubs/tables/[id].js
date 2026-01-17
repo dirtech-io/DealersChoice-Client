@@ -18,9 +18,10 @@ import { useAuth } from "../../../context/auth";
 import Seat from "../../../components/poker/Seat";
 import ActionButtons from "../../../components/poker/ActionButtons";
 import CommunityCards from "../../../components/poker/CommunityCards";
-import { COLORS, SPACING, RADIUS, SIZING } from "../../../styles/theme";
-import { globalStyles } from "../../../styles/global";
+import HandHistory from "../../../components/poker/HandHistory"; // Don't forget to import this!
 import DealerMessage from "../../../components/poker/DealerMessage";
+import { COLORS, SPACING, RADIUS } from "../../../styles/theme";
+import { globalStyles } from "../../../styles/global";
 
 const { width, height } = Dimensions.get("window");
 
@@ -31,7 +32,6 @@ export default function PokerTable() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
 
-  // 1. Table State
   const [tableData, setTableData] = useState({
     players: Array(10).fill(null),
     dealerIndex: null,
@@ -41,29 +41,30 @@ export default function PokerTable() {
     pot: 0,
     actingIndex: null,
     currentBet: 0,
+    currentStreet: "PREFLOP",
     lastMessage: "DEALER'S CHOICE",
   });
 
-  // 2. Local UI State
   const [selectedSeat, setSelectedSeat] = useState(null);
   const [buyInModalVisible, setBuyInModalVisible] = useState(false);
   const [buyInAmount, setBuyInAmount] = useState("200");
   const [myHand, setMyHand] = useState([]);
-  const [reBuyVisible, setReBuyVisible] = useState(false);
-  const [reBuyAmount, setReBuyAmount] = useState("200");
+  const [winners, setWinners] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [isHistoryVisible, setIsHistoryVisible] = useState(false);
 
-  // Optimized Vertical Seat Positions
+  // Define seat positions inside the component or a constants file
   const seatPositions = [
-    { top: "85%", left: "50%" }, // Seat 0: Bottom Center (Hero)
-    { top: "78%", left: "18%" }, // Seat 1: Bottom Left
-    { top: "58%", left: "8%" }, // Seat 2: Mid Left
-    { top: "38%", left: "8%" }, // Seat 3: Top Left
-    { top: "18%", left: "25%" }, // Seat 4: Top Corner Left
-    { top: "18%", left: "75%" }, // Seat 5: Top Corner Right
-    { top: "38%", left: "92%" }, // Seat 6: Top Right
-    { top: "58%", left: "92%" }, // Seat 7: Mid Right
-    { top: "78%", left: "82%" }, // Seat 8: Bottom Right
-    { top: "85%", left: "72%" }, // Seat 9: Bottom Right (Adjacent to Hero)
+    { top: "85%", left: "50%" },
+    { top: "78%", left: "18%" },
+    { top: "58%", left: "8%" },
+    { top: "38%", left: "8%" },
+    { top: "18%", left: "25%" },
+    { top: "18%", left: "75%" },
+    { top: "38%", left: "92%" },
+    { top: "58%", left: "92%" },
+    { top: "78%", left: "82%" },
+    { top: "85%", left: "72%" },
   ];
 
   const myPlayer = tableData.players.find((p) => p?.userId === user?.id);
@@ -79,19 +80,36 @@ export default function PokerTable() {
     });
 
     socket.on("tableStateUpdate", (updatedTable) => {
+      if (
+        updatedTable.actingIndex !== null &&
+        updatedTable.players[updatedTable.actingIndex]?.userId === user?.id &&
+        tableData.actingIndex !== updatedTable.actingIndex // Only play if index actually changed
+      ) {
+        playSound("alert");
+      }
+
       setTableData((prev) => ({ ...prev, ...updatedTable }));
-      if (!updatedTable.gameInProgress) setMyHand([]);
+
+      // 1. History Logic
+      if (updatedTable.lastMessage) {
+        setHistory((prev) => {
+          if (prev[0] === updatedTable.lastMessage) return prev;
+          return [updatedTable.lastMessage, ...prev].slice(0, 50);
+        });
+      }
+
+      // 2. Clear visual states if game ended
+      if (!updatedTable.gameInProgress) {
+        setMyHand([]);
+        setWinners([]);
+      }
+
+      // 3. Handle Showdown Winners
       if (
         updatedTable.currentStreet === "SHOWDOWN" &&
         updatedTable.lastWinners
       ) {
-        // This triggers the animations in our Seat components
         setWinners(updatedTable.lastWinners);
-
-        // Auto-reset the UI after 5 seconds to prepare for the next hand
-        setTimeout(() => {
-          setWinners([]);
-        }, 5000);
       }
     });
 
@@ -103,6 +121,9 @@ export default function PokerTable() {
     });
 
     return () => {
+      socket.off("tableStateUpdate");
+      socket.off("privateHand");
+      socket.off("error");
       socket.disconnect();
     };
   }, [id]);
@@ -114,6 +135,18 @@ export default function PokerTable() {
   };
 
   const confirmSitDown = () => {
+    const amount = parseInt(buyInAmount);
+    if (isNaN(amount) || amount <= 0) {
+      Alert.alert("Invalid Amount", "Please enter a valid buy-in amount.");
+      return;
+    }
+    if (user?.balance < amount) {
+      Alert.alert(
+        "Insufficient Funds",
+        `You only have $${user.balance}. Please buy more chips or enter a lower amount.`,
+      );
+      return;
+    }
     socket.emit("sitDown", {
       tableId: id,
       seatIndex: selectedSeat,
@@ -123,40 +156,45 @@ export default function PokerTable() {
     setBuyInModalVisible(false);
   };
 
-  const [winners, setWinners] = useState([]);
-
-  useEffect(() => {
-    // Listen for the showdown/winner event
-    socket.on("handOver", (data) => {
-      // data.winners usually contains an array of seatIndexes and their hand names
-      setWinners(data.winners);
-
-      // Clear winners after 5 seconds to reset animations
-      setTimeout(() => {
-        setWinners([]);
-      }, 5000);
-    });
-
-    return () => socket.off("handOver");
-  }, []);
+  const handleLeave = () => {
+    Alert.alert(
+      "Leave Table",
+      "Are you sure you want to leave? Your chips will be returned to your wallet.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Leave",
+          onPress: () => {
+            socket.emit("leaveTable", { tableId: id });
+            router.back();
+          },
+        },
+      ],
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={handleLeave}>
           <Text style={styles.leaveText}>Leave</Text>
         </TouchableOpacity>
+
         <Text style={styles.tableTitle}>Table #{id?.slice(-4)}</Text>
-        <View style={{ width: 40 }} />
+
+        <TouchableOpacity
+          style={styles.historyBtn}
+          onPress={() => setIsHistoryVisible(true)}
+        >
+          <Text style={styles.historyBtnText}>History</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.tableArea}>
-        {/* THE VISUAL TABLE BOUNDARY */}
         <View style={styles.tableBoundary}>
           <View style={styles.felt}>
             <DealerMessage message={tableData?.lastMessage} />
 
-            {/* CENTER INFO AREA */}
             <View style={styles.centerInfo}>
               <CommunityCards
                 cards={tableData.communityCards}
@@ -165,47 +203,41 @@ export default function PokerTable() {
               />
             </View>
 
-            {/* SEATS - Positioned absolutely inside the felt */}
-
             {seatPositions.map((pos, index) => {
-              const isWinner = winners.some((w) => w.seatIndex === index);
-              const winType = winners.find(
-                (w) => w.seatIndex === index
-              )?.handName;
-              <Seat
-                key={index}
-                index={index}
-                pos={pos}
-                player={tableData.players[index]}
-                isDealer={tableData.dealerIndex === index}
-                isActing={tableData.actingIndex === index}
-                onPress={() => handleSeatPress(index)}
-                myHand={myPlayer?.seatIndex === index ? myHand : null}
-                currentStreet={tableData.currentStreet}
-                socket={socket}
-                isWinner={isWinner}
-                winType={winType}
-              />;
+              const winnerData = winners.find((w) => w.seatIndex === index);
+              return (
+                <Seat
+                  key={index}
+                  index={index}
+                  pos={pos}
+                  player={tableData.players[index]}
+                  isDealer={tableData.dealerIndex === index}
+                  isActing={tableData.actingIndex === index}
+                  onPress={() => handleSeatPress(index)}
+                  myHand={myPlayer?.seatIndex === index ? myHand : null}
+                  currentStreet={tableData.currentStreet}
+                  socket={socket}
+                  isWinner={!!winnerData}
+                  winType={winnerData?.handName}
+                />
+              );
             })}
           </View>
         </View>
 
-        {/* Action Buttons: Visible only during your turn */}
-        {tableData.actingIndex === myPlayer?.seatIndex && (
-          <ActionButtons
-            tableData={tableData}
-            myPlayer={myPlayer}
-            onAction={(type, amount) => {
-              socket.emit("playerAction", {
-                tableId: id,
-                actionType: type,
-                amount,
-              });
-            }}
-          />
-        )}
+        <ActionButtons
+          tableData={tableData}
+          myPlayer={myPlayer}
+          socket={socket}
+          onAction={(type, amount) => {
+            socket.emit("playerAction", {
+              tableId: id,
+              actionType: type,
+              amount,
+            });
+          }}
+        />
 
-        {/* Dealer Choice Menu */}
         {isMeTheDealer && !tableData.gameInProgress && (
           <View style={styles.dealerChoiceOverlay}>
             <Text style={styles.choiceTitle}>SELECT GAME</Text>
@@ -226,27 +258,44 @@ export default function PokerTable() {
         )}
       </View>
 
-      {/* MODALS remain the same... */}
+      <HandHistory
+        visible={isHistoryVisible}
+        onClose={() => setIsHistoryVisible(false)}
+        history={history}
+      />
+
+      {/* Buy-in Modal (Simplified here for space, keep your original) */}
       <Modal visible={buyInModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.buyInBox}>
             <Text style={styles.modalTitle}>
               SIT AT SEAT {selectedSeat + 1}
             </Text>
+
+            {/* Show available balance */}
+            <Text style={styles.balanceText}>
+              Available: ${user?.balance?.toLocaleString() || "0"}
+            </Text>
+
             <TextInput
               style={styles.input}
               keyboardType="numeric"
               value={buyInAmount}
               onChangeText={setBuyInAmount}
-              autoFocus
+              placeholder="Enter Amount"
+              placeholderTextColor="#666"
             />
+
             <View style={styles.modalActions}>
               <TouchableOpacity onPress={() => setBuyInModalVisible(false)}>
                 <Text style={styles.cancelText}>CANCEL</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={confirmSitDown}
-                style={styles.confirmBtn}
+                style={[
+                  styles.confirmBtn,
+                  { opacity: parseInt(buyInAmount) > user?.balance ? 0.5 : 1 },
+                ]}
               >
                 <Text style={styles.confirmText}>BUY IN</Text>
               </TouchableOpacity>
@@ -259,10 +308,8 @@ export default function PokerTable() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
+  // ... (Keep your previous styles)
+  container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -271,22 +318,25 @@ const styles = StyleSheet.create({
   },
   leaveText: { color: COLORS.textSecondary, fontWeight: "bold" },
   tableTitle: { color: COLORS.primary, fontWeight: "bold", letterSpacing: 1 },
-  tableArea: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
+  historyBtn: {
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: RADIUS.sm,
   },
+  historyBtnText: {
+    color: COLORS.primary,
+    fontWeight: "bold",
+    fontSize: 12,
+  },
+  tableArea: { flex: 1, justifyContent: "center", alignItems: "center" },
   tableBoundary: {
     width: width * 0.95,
     aspectRatio: 0.65,
     backgroundColor: COLORS.wood || "#3d2b1f",
     borderRadius: 200,
     padding: 10,
-    elevation: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
-    shadowRadius: 15,
   },
   felt: {
     flex: 1,
@@ -294,7 +344,7 @@ const styles = StyleSheet.create({
     borderRadius: 190,
     borderWidth: 2,
     borderColor: "rgba(255,255,255,0.1)",
-    position: "relative", // Critical for absolute Seat positioning
+    position: "relative",
     justifyContent: "center",
     alignItems: "center",
   },
@@ -325,8 +375,6 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: RADIUS.md,
     marginHorizontal: 5,
-    borderWidth: 1,
-    borderColor: "#444",
   },
   gameBtnText: { color: "#fff", fontWeight: "bold" },
   modalOverlay: {
@@ -340,8 +388,6 @@ const styles = StyleSheet.create({
     padding: 25,
     borderRadius: 15,
     width: 300,
-    borderWidth: 1,
-    borderColor: "#444",
   },
   modalTitle: {
     color: "#fff",
@@ -356,7 +402,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     textAlign: "center",
     fontSize: 20,
-    fontWeight: "bold",
     marginBottom: 20,
   },
   modalActions: {
@@ -372,4 +417,23 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   confirmText: { color: "#000", fontWeight: "bold" },
+  balanceText: {
+    color: "#aaa",
+    textAlign: "center",
+    fontSize: 12,
+    marginBottom: 10,
+  },
+  // Ensure your input text is visible
+  input: {
+    backgroundColor: "#000",
+    color: COLORS.primary,
+    padding: 15,
+    borderRadius: 10,
+    textAlign: "center",
+    fontSize: 22,
+    fontWeight: "bold",
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#333",
+  },
 });

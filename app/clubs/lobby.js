@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -8,14 +8,15 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
-  ScrollView,
   Alert,
+  Animated,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE, supabase } from "../../api/config";
 import { COLORS, SPACING, RADIUS } from "../../styles/theme";
 import { globalStyles } from "../../styles/global";
+import { useSocket } from "../../context/SocketContext";
 
 // Define the "Dealer's Choice" options
 const GAME_VARIATIONS = [
@@ -31,11 +32,13 @@ const GAME_VARIATIONS = [
 export default function PokerLobby() {
   const { clubId } = useLocalSearchParams();
   const router = useRouter();
+  const socket = useSocket();
 
   const [tables, setTables] = useState([]);
   const [loading, setLoading] = useState(true);
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
+  const [isStaff, setIsStaff] = useState(false);
 
   // Table Configuration State
   const [tableName, setTableName] = useState("");
@@ -43,28 +46,47 @@ export default function PokerLobby() {
   const [bb, setBb] = useState("2");
   const [selectedGames, setSelectedGames] = useState(["NLH"]);
 
-  const [isStaff, setIsStaff] = useState(false);
+  // Animation for the "Live" dot
+  const dotOpacity = useRef(new Animated.Value(1)).current;
+
+  // Start pulsing animation on mount
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(dotOpacity, {
+          toValue: 0.2,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(dotOpacity, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, []);
 
   const fetchTables = async () => {
-    setLoading(true);
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
-      // 1. Fetch tables (as we did before)
+      // 1. Fetch tables via REST (Initial Load)
       const tableRes = await fetch(`${API_BASE}/club/tables/${clubId}`);
       const tableData = await tableRes.json();
       setTables(tableData);
 
-      // 2. Fetch club details to check ownership
-      // You'll need an endpoint like GET /api/clubs/:clubId
+      // 2. Fetch club details to check ownership/staff status
       const clubRes = await fetch(`${API_BASE}/clubs/${clubId}`);
       const clubData = await clubRes.json();
 
       if (clubData?.members) {
         const me = clubData.members.find(
-          (m) => m.userId.toString() === user.id.toString()
+          (m) => m.userId.toString() === user.id.toString(),
         );
         if (me && (me.role === "owner" || me.role === "manager")) {
           setIsStaff(true);
@@ -75,11 +97,30 @@ export default function PokerLobby() {
         setIsOwner(true);
       }
     } catch (error) {
-      console.error(error);
+      console.error("Lobby fetch error:", error);
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!socket || !clubId) return;
+
+    fetchTables();
+
+    // Join the specific Club Lobby Room via Socket for live updates
+    socket.emit("joinClubLobby", { clubId });
+
+    // Listen for Live Updates (Player counts, new tables, etc.)
+    socket.on("clubTablesUpdate", (updatedTables) => {
+      setTables(updatedTables);
+    });
+
+    return () => {
+      socket.off("clubTablesUpdate");
+      socket.emit("leaveClubLobby", { clubId });
+    };
+  }, [clubId, socket]);
 
   const toggleGame = (id) => {
     if (selectedGames.includes(id)) {
@@ -94,7 +135,6 @@ export default function PokerLobby() {
   const handleCreateTable = async () => {
     if (!tableName) return Alert.alert("Required", "Please name the table.");
 
-    // Get the current user's ID from Supabase
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -105,62 +145,69 @@ export default function PokerLobby() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: tableName,
-          blinds: { small: parseInt(sb), big: parseInt(bb) },
+          sb: parseInt(sb),
+          bb: parseInt(bb),
           allowedGames: selectedGames,
-          user_supabase_id: user.id, // Pass the ID for security verification
+          user_supabase_id: user.id,
         }),
       });
 
-      const result = await response.json();
-
       if (response.ok) {
         setCreateModalVisible(false);
-        fetchTables();
+        setTableName("");
+        // Note: The socket broadcast from the server will update the list for us.
       } else {
-        // This will catch the 403 "Access Denied" from the server
-        Alert.alert("Permission Denied", result.message);
+        const result = await response.json();
+        Alert.alert("Error", result.message);
       }
     } catch (error) {
-      Alert.alert("Error", "Could not connect to security server.");
+      Alert.alert("Error", "Could not connect to server.");
     }
   };
 
-  useEffect(() => {
-    fetchTables();
-  }, [clubId]);
+  const renderTableItem = ({ item }) => {
+    const activePlayers = item.players?.filter((p) => p !== null).length || 0;
+    const isGameActive = item.gameInProgress || activePlayers >= 2;
 
-  const renderTableItem = ({ item }) => (
-    <TouchableOpacity
-      style={styles.tableCard}
-      onPress={() => router.push(`/clubs/tables/${item._id}`)}
-    >
-      <View style={styles.cardHeader}>
-        <Text style={styles.tableName}>{item.name}</Text>
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>ID: {item._id.slice(-4)}</Text>
-        </View>
-      </View>
-
-      <Text style={styles.blindsText}>
-        Stakes: ${item.blinds?.small}/${item.blinds?.big}
-      </Text>
-
-      <View style={styles.gameTags}>
-        {item.allowedGames?.map((g) => (
-          <View key={g} style={styles.tag}>
-            <Text style={styles.tagText}>{g}</Text>
+    return (
+      <TouchableOpacity
+        style={styles.tableCard}
+        onPress={() => router.push(`/clubs/tables/${item._id}`)}
+      >
+        <View style={styles.cardHeader}>
+          <View style={styles.tableNameContainer}>
+            {isGameActive && (
+              <Animated.View
+                style={[styles.liveDot, { opacity: dotOpacity }]}
+              />
+            )}
+            <Text style={styles.tableName}>{item.name}</Text>
           </View>
-        ))}
-      </View>
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>ID: {item._id?.slice(-4)}</Text>
+          </View>
+        </View>
 
-      <View style={styles.cardFooter}>
-        <Text style={styles.playerCount}>
-          {item.players?.length || 0}/9 Players
+        <Text style={styles.blindsText}>
+          Stakes: ${item.blinds?.small || item.sb}/$
+          {item.blinds?.big || item.bb}
         </Text>
-        <Text style={styles.joinAction}>TAP TO JOIN ❯</Text>
-      </View>
-    </TouchableOpacity>
-  );
+
+        <View style={styles.gameTags}>
+          {item.allowedGames?.map((g) => (
+            <View key={g} style={styles.tag}>
+              <Text style={styles.tagText}>{g}</Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.cardFooter}>
+          <Text style={styles.playerCount}>{activePlayers}/9 Players</Text>
+          <Text style={styles.joinAction}>TAP TO JOIN ❯</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -169,7 +216,7 @@ export default function PokerLobby() {
           <Text style={styles.backBtnText}>❮ BACK</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>CLUB LOBBY</Text>
-        {isOwner ? (
+        {isOwner || isStaff ? (
           <TouchableOpacity
             style={styles.createBtn}
             onPress={() => setCreateModalVisible(true)}
@@ -177,7 +224,7 @@ export default function PokerLobby() {
             <Text style={styles.createBtnText}>+ TABLE</Text>
           </TouchableOpacity>
         ) : (
-          <View style={{ width: 60 }} /> // Placeholder to keep header layout balanced
+          <View style={{ width: 60 }} />
         )}
       </View>
 
@@ -312,22 +359,35 @@ const styles = StyleSheet.create({
     color: "#000",
     fontWeight: "bold",
   },
-
-  // Table Cards in List
   tableCard: {
     backgroundColor: "#151515",
     borderRadius: RADIUS.lg,
     padding: SPACING.lg,
     marginBottom: SPACING.md,
     borderLeftWidth: 4,
-    borderLeftColor: COLORS.primary, // Highlights the table with the gold theme
+    borderLeftColor: COLORS.primary,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.05)",
   },
   cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: SPACING.sm,
+  },
+  tableNameContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#4CAF50",
+    marginRight: 8,
+    shadowColor: "#4CAF50",
+    shadowRadius: 4,
+    shadowOpacity: 0.8,
   },
   tableName: {
     color: COLORS.textMain,
@@ -385,8 +445,6 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     textTransform: "uppercase",
   },
-
-  // Create Table Modal
   modalOverlay: {
     ...globalStyles.modalOverlay,
     padding: SPACING.lg,
@@ -403,6 +461,10 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginBottom: 20,
     textTransform: "uppercase",
+  },
+  row: {
+    flexDirection: "row",
+    marginVertical: 10,
   },
   label: {
     color: COLORS.textSecondary,
@@ -427,7 +489,7 @@ const styles = StyleSheet.create({
   gameChip: {
     paddingHorizontal: SPACING.md,
     paddingVertical: 8,
-    borderRadius: RADIUS.round, // Pill-style for game types
+    borderRadius: RADIUS.round,
     borderWidth: 1,
     borderColor: "#333",
     marginRight: 8,
@@ -446,8 +508,8 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     padding: 18,
     borderRadius: RADIUS.md,
-    ...globalStyles.centered,
     marginTop: SPACING.lg,
+    alignItems: "center",
   },
   confirmBtnText: {
     color: "#000",
