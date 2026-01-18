@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -6,32 +6,80 @@ import {
   StyleSheet,
   TouchableOpacity,
   Modal,
+  SafeAreaView,
 } from "react-native";
 import { COLORS, SPACING, RADIUS } from "../../styles/theme";
 
-export default function HandHistory({ visible, onClose, history }) {
+export default function HandHistory({ visible, onClose, history = [] }) {
+  const scrollViewRef = useRef();
+
+  // Auto-scroll to bottom when history updates or modal opens
+  useEffect(() => {
+    if (visible && history.length > 0) {
+      setTimeout(() => {
+        scrollViewRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
+  }, [visible, history]);
+
+  // Helper to colorize specific poker keywords
+  const getLogTextStyle = (text) => {
+    const lower = text.toLowerCase();
+    if (lower.includes("win") || lower.includes("pot"))
+      return { color: COLORS.primary, fontWeight: "800" };
+    if (lower.includes("raise") || lower.includes("bet"))
+      return { color: "#4cd137", fontWeight: "600" };
+    if (lower.includes("fold")) return { color: "#e84118" };
+    if (lower.includes("all-in"))
+      return { color: "#fbc531", fontWeight: "bold" };
+    return { color: "#dcdde1" };
+  };
+
   return (
     <Modal visible={visible} transparent animationType="slide">
       <View style={styles.overlay}>
-        <View style={styles.container}>
+        <TouchableOpacity style={styles.dismissArea} onPress={onClose} />
+
+        <SafeAreaView style={styles.container}>
           <View style={styles.header}>
-            <Text style={styles.title}>HAND HISTORY</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Text style={styles.closeText}>CLOSE</Text>
+            <View style={styles.titleRow}>
+              <View style={styles.historyIcon} />
+              <Text style={styles.title}>LIVE ACTION LOG</Text>
+            </View>
+            <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+              <Text style={styles.closeText}>DONE</Text>
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.logScroll}>
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.logScroll}
+            contentContainerStyle={styles.scrollContent}
+          >
             {history.map((msg, i) => (
               <View key={i} style={styles.logItem}>
-                <Text style={styles.logText}>• {msg}</Text>
+                <Text style={styles.timestamp}>
+                  {new Date().toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </Text>
+                <Text style={[styles.logText, getLogTextStyle(msg)]}>
+                  {msg}
+                </Text>
               </View>
             ))}
+
             {history.length === 0 && (
-              <Text style={styles.emptyText}>No actions recorded yet.</Text>
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>
+                  No hands recorded in this session.
+                </Text>
+              </View>
             )}
           </ScrollView>
-        </View>
+        </SafeAreaView>
       </View>
     </Modal>
   );
@@ -40,31 +88,95 @@ export default function HandHistory({ visible, onClose, history }) {
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(0,0,0,0.7)",
     justifyContent: "flex-end",
   },
+  dismissArea: {
+    flex: 1,
+  },
   container: {
-    height: "50%",
-    backgroundColor: "#1a1a1a",
+    height: "60%",
+    backgroundColor: "#121212",
     borderTopLeftRadius: RADIUS.lg,
     borderTopRightRadius: RADIUS.lg,
-    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: "#333",
+    borderBottomWidth: 0,
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: SPACING.md,
-    borderBottomWidth: 1,
-    borderBottomColor: "#333",
-    paddingBottom: 10,
-  },
-  title: { color: COLORS.primary, fontWeight: "bold" },
-  closeText: { color: "#fff", fontWeight: "bold" },
-  logItem: {
-    paddingVertical: 8,
+    alignItems: "center",
+    padding: SPACING.md,
+    backgroundColor: "#1a1a1a",
+    borderTopLeftRadius: RADIUS.lg,
+    borderTopRightRadius: RADIUS.lg,
     borderBottomWidth: 1,
     borderBottomColor: "#222",
   },
-  logText: { color: "#ccc", fontSize: 13 },
-  emptyText: { color: "#666", textAlign: "center", marginTop: 20 },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  historyIcon: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: COLORS.primary,
+    marginRight: 8,
+  },
+  title: {
+    color: "#FFF",
+    fontWeight: "900",
+    fontSize: 14,
+    letterSpacing: 1,
+  },
+  closeBtn: {
+    backgroundColor: "#333",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: RADIUS.sm,
+  },
+  closeText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 12,
+  },
+  logScroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 40,
+  },
+  logItem: {
+    flexDirection: "row",
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1a1a1a",
+    alignItems: "flex-start",
+  },
+  timestamp: {
+    color: "#555",
+    fontSize: 10,
+    width: 65,
+    fontFamily: "monospace",
+    marginTop: 2,
+  },
+  logText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  emptyContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 100,
+  },
+  emptyText: {
+    color: "#444",
+    fontSize: 14,
+    fontWeight: "bold",
+  },
 });

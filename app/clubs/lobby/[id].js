@@ -177,23 +177,27 @@ export default function PokerLobby() {
   const renderTableItem = ({ item }) => {
     const activePlayers = item.players?.filter((p) => p !== null).length || 0;
 
+    // Accessing nested blinds from your backend structure
+    const small = item.blinds?.small || item.sb;
+    const big = item.blinds?.big || item.bb;
+
     return (
       <TouchableOpacity
         style={styles.tableCard}
         onPress={() => handleTableClick(item)}
       >
         <View style={styles.cardHeader}>
-          <View style={styles.tableNameContainer}>
-            <Text style={styles.tableName}>{item.name}</Text>
-          </View>
+          <Text style={styles.tableName}>{item.name}</Text>
           <View style={styles.badge}>
-            <Text style={styles.badgeText}>ID: {item._id?.slice(-4)}</Text>
+            <Text style={styles.badgeText}>
+              {item.allowedGames?.[0] || "NLH"}
+            </Text>
           </View>
         </View>
 
         <View style={styles.statsRow}>
           <Text style={styles.blindsText}>
-            Stakes: ${item.sb}/${item.bb}
+            Stakes: ${small}/${big}
           </Text>
           <Text style={styles.buyinRangeText}>
             Buy-in: ${item.minBuyIn} - ${item.maxBuyIn}

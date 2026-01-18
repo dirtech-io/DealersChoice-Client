@@ -1,4 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+} from "react";
 import {
   View,
   Text,
@@ -13,25 +19,29 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import io from "socket.io-client";
 import { useAuth } from "../../../context/auth";
+import * as Haptics from "expo-haptics";
 
 // REUSABLE COMPONENTS
 import Seat from "../../../components/poker/Seat";
 import ActionButtons from "../../../components/poker/ActionButtons";
 import CommunityCards from "../../../components/poker/CommunityCards";
-import HandHistory from "../../../components/poker/HandHistory"; // Don't forget to import this!
+import HandHistory from "../../../components/poker/HandHistory";
 import DealerMessage from "../../../components/poker/DealerMessage";
+import BuyInModal from "../../../components/poker/BuyInModal";
+import SettingsModal from "../../../components/poker/SettingsModal";
+import ShowdownOverlay from "../../../components/poker/ShowdownOverlay";
 import { COLORS, SPACING, RADIUS } from "../../../styles/theme";
-import { globalStyles } from "../../../styles/global";
+import { playSound } from "../../../utils/audioManager";
 
-const { width, height } = Dimensions.get("window");
-
-let socket;
+const { width } = Dimensions.get("window");
 
 export default function PokerTable() {
-  const { user } = useAuth();
-  const { id } = useLocalSearchParams();
+  const { profile } = useAuth();
+  const { id: tableId } = useLocalSearchParams();
   const router = useRouter();
+  const socketRef = useRef(null);
 
+  // --- 1. STATE MANAGEMENT ---
   const [tableData, setTableData] = useState({
     players: Array(10).fill(null),
     dealerIndex: null,
@@ -42,9 +52,26 @@ export default function PokerTable() {
     actingIndex: null,
     currentBet: 0,
     currentStreet: "PREFLOP",
-    lastMessage: "DEALER'S CHOICE",
+    lastMessage: "CONNECTING...",
+    clubId: null,
+    supportedGameTypes: [],
   });
 
+  const [settings, setSettings] = useState({
+    soundEnabled: true,
+    hapticsEnabled: true,
+    autoMuck: false,
+  });
+
+  // Discard System State
+  const [isDiscardMode, setIsDiscardMode] = useState(false);
+  const [discardSelection, setDiscardSelection] = useState([]);
+  const [discardRequirement, setDiscardRequirement] = useState({
+    count: 0,
+    type: "EXACT",
+  });
+
+  const [settingsVisible, setSettingsVisible] = useState(false);
   const [selectedSeat, setSelectedSeat] = useState(null);
   const [buyInModalVisible, setBuyInModalVisible] = useState(false);
   const [buyInAmount, setBuyInAmount] = useState("200");
@@ -54,44 +81,68 @@ export default function PokerTable() {
   const [isHistoryVisible, setIsHistoryVisible] = useState(false);
   const [topUpVisible, setTopUpVisible] = useState(false);
 
-  // Define seat positions inside the component or a constants file
+  // --- 2. DYNAMIC CONFIGURATION HELPERS ---
+  const supportedGames = tableData.supportedGameTypes || [];
+  const isMultiGame = supportedGames.length > 1;
+
+  const getGameDisplayInfo = (code) => {
+    const mapping = {
+      NLH: { name: "Hold'em", cards: 2 },
+      PLO: { name: "Omaha", cards: 4 },
+      PLO5: { name: "5-Card PLO", cards: 5 },
+      PINE: { name: "Pineapple", cards: 3 },
+      SHORT: { name: "Short Deck", cards: 2 },
+      DRAW: { name: "5-Card Draw", cards: 5 },
+    };
+    return mapping[code] || { name: code, cards: "?" };
+  };
+
+  const userClubBalance = useMemo(() => {
+    if (!profile?.Gems || !tableData.clubId) return 0;
+    const entry = profile.Gems.find(
+      (g) => g.clubId.toString() === tableData.clubId.toString(),
+    );
+    return entry ? entry.balance : 0;
+  }, [profile, tableData.clubId]);
+
   const seatPositions = [
-    { top: "85%", left: "50%" },
-    { top: "78%", left: "18%" },
-    { top: "58%", left: "8%" },
-    { top: "38%", left: "8%" },
-    { top: "18%", left: "25%" },
-    { top: "18%", left: "75%" },
-    { top: "38%", left: "92%" },
-    { top: "58%", left: "92%" },
-    { top: "78%", left: "82%" },
-    { top: "85%", left: "72%" },
+    { top: "82%", left: "50%" },
+    { top: "75%", left: "15%" },
+    { top: "55%", left: "5%" },
+    { top: "35%", left: "5%" },
+    { top: "15%", left: "25%" },
+    { top: "15%", left: "75%" },
+    { top: "35%", left: "95%" },
+    { top: "55%", left: "95%" },
+    { top: "75%", left: "85%" },
+    { top: "82%", left: "72%" },
   ];
 
-  const myPlayer = tableData.players.find((p) => p?.userId === user?.id);
+  const myPlayer = useMemo(
+    () => tableData.players.find((p) => p?.userId === profile?.supabase_id),
+    [tableData.players, profile?.supabase_id],
+  );
+
   const isMeTheDealer =
     tableData.dealerIndex !== null &&
-    tableData.players[tableData.dealerIndex]?.userId === user?.id;
+    tableData.players[tableData.dealerIndex]?.userId === profile?.supabase_id;
 
+  // --- 3. SOCKET LOGIC ---
   useEffect(() => {
-    socket = io(`http://192.168.1.94:3000`, { transports: ["websocket"] });
+    // Replace with your actual server URL or environment variable
+    socketRef.current = io(`http://192.168.1.94:3000`, {
+      transports: ["websocket"],
+      query: { userId: profile?.supabase_id },
+    });
+    const socket = socketRef.current;
 
     socket.on("connect", () => {
-      socket.emit("joinTable", { tableId: id, userId: user?.id });
+      socket.emit("joinTable", { tableId, userId: profile?.supabase_id });
     });
 
     socket.on("tableStateUpdate", (updatedTable) => {
-      if (
-        updatedTable.actingIndex !== null &&
-        updatedTable.players[updatedTable.actingIndex]?.userId === user?.id &&
-        tableData.actingIndex !== updatedTable.actingIndex // Only play if index actually changed
-      ) {
-        playSound("alert");
-      }
-
       setTableData((prev) => ({ ...prev, ...updatedTable }));
 
-      // 1. History Logic
       if (updatedTable.lastMessage) {
         setHistory((prev) => {
           if (prev[0] === updatedTable.lastMessage) return prev;
@@ -99,35 +150,104 @@ export default function PokerTable() {
         });
       }
 
-      // 2. Clear visual states if game ended
       if (!updatedTable.gameInProgress) {
         setMyHand([]);
-        setWinners([]);
+        setIsDiscardMode(false);
+        setDiscardSelection([]);
+        setTimeout(() => setWinners([]), 5000);
       }
 
-      // 3. Handle Showdown Winners
       if (
         updatedTable.currentStreet === "SHOWDOWN" &&
         updatedTable.lastWinners
       ) {
         setWinners(updatedTable.lastWinners);
+        if (settings.hapticsEnabled) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
       }
     });
 
-    socket.on("privateHand", (cards) => setMyHand(cards));
+    socket.on("privateHand", (cards) => {
+      setMyHand(cards);
+      setDiscardSelection([]); // Clear selections when new cards arrive
+    });
+
+    socket.on("requestDiscard", ({ count, type }) => {
+      setIsDiscardMode(true);
+      setDiscardRequirement({ count, type: type || "EXACT" });
+      setDiscardSelection([]);
+      if (settings.hapticsEnabled) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      }
+    });
+
+    socket.on("discardSuccess", () => {
+      setIsDiscardMode(false);
+      setDiscardSelection([]);
+    });
 
     socket.on("error", (msg) => {
-      Alert.alert("Error", msg);
+      Alert.alert("Table Error", msg);
       setBuyInModalVisible(false);
     });
 
+    socket.on("gameTypeChanged", ({ gameType, dealerName }) => {
+      if (settings.soundEnabled) playSound("shuffle");
+    });
+
     return () => {
-      socket.off("tableStateUpdate");
-      socket.off("privateHand");
-      socket.off("error");
+      socket.emit("leaveTable", { tableId });
       socket.disconnect();
     };
-  }, [id]);
+  }, [
+    tableId,
+    settings.hapticsEnabled,
+    settings.soundEnabled,
+    profile?.supabase_id,
+  ]);
+
+  // --- 4. HANDLERS ---
+  const handleToggleCardSelection = useCallback(
+    (cardIndex) => {
+      if (!isDiscardMode) return;
+
+      setDiscardSelection((prev) => {
+        const isSelected = prev.includes(cardIndex);
+        if (isSelected) {
+          return prev.filter((i) => i !== cardIndex);
+        } else {
+          // Validation logic for MAX/EXACT
+          if (
+            discardRequirement.type !== "ANY" &&
+            prev.length >= discardRequirement.count
+          ) {
+            return prev;
+          }
+          if (settings.hapticsEnabled) Haptics.selectionAsync();
+          return [...prev, cardIndex];
+        }
+      });
+    },
+    [isDiscardMode, discardRequirement, settings.hapticsEnabled],
+  );
+
+  const handleConfirmDiscard = () => {
+    if (
+      discardRequirement.type === "EXACT" &&
+      discardSelection.length !== discardRequirement.count
+    ) {
+      return Alert.alert(
+        "Error",
+        `Select exactly ${discardRequirement.count} cards.`,
+      );
+    }
+
+    socketRef.current.emit("discardCards", {
+      tableId,
+      indices: discardSelection,
+    });
+  };
 
   const handleSeatPress = (index) => {
     if (tableData.players[index] || myPlayer) return;
@@ -137,114 +257,71 @@ export default function PokerTable() {
 
   const confirmSitDown = () => {
     const amount = parseInt(buyInAmount);
-    if (isNaN(amount) || amount <= 0) {
-      Alert.alert("Invalid Amount", "Please enter a valid buy-in amount.");
-      return;
-    }
-    if (user?.balance < amount) {
-      Alert.alert(
-        "Insufficient Funds",
-        `You only have $${user.balance}. Please buy more chips or enter a lower amount.`,
-      );
-      return;
-    }
-    socket.emit("sitDown", {
-      tableId: id,
+    if (isNaN(amount) || amount <= 0) return Alert.alert("Invalid Amount");
+    if (userClubBalance < amount) return Alert.alert("Insufficient Gems");
+
+    socketRef.current.emit("sitDown", {
+      tableId,
       seatIndex: selectedSeat,
-      userId: user.id,
-      buyIn: parseInt(buyInAmount),
+      buyIn: amount,
     });
     setBuyInModalVisible(false);
   };
 
-  const handleTopUpConfirm = (amount) => {
-    socket.emit("topUp", {
-      tableId,
-      userId: profile.supabase_id,
-      clubId: tableData.clubId,
-      amount: parseInt(amount),
-    });
-    setTopUpVisible(false);
-  };
-
-  const currentChips =
-    tableData?.players?.find((p) => p?.userId === profile.supabase_id)?.chips ||
-    0;
-  const maxPossibleTopUp = (tableData?.maxBuyIn || 0) - currentChips;
-
-  const handleLeave = () => {
-    Alert.alert(
-      "Leave Table",
-      "Are you sure you want to leave? Your chips will be returned to your wallet.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Leave",
-          onPress: () => {
-            socket.emit("leaveTable", { tableId: id });
-            router.back();
-          },
-        },
-      ],
-    );
-  };
-
   const handleStandUp = () => {
-    if (!table) return;
-    const isMyTurn = tableData?.currentTurn === mySeatIndex;
-    const isInHand = tableData?.playersInHand?.includes(mySeatIndex);
-
-    let message = "Are you sure you want to stand up?";
-    if (isInHand) {
-      message =
-        "You are currently in a hand! Standing up will FOLD your cards and your current bets will stay in the pot. Proceed?";
-    }
-
-    Alert.alert(
-      "Stand Up",
-      "Return your chips to your club gems and leave the seat?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Confirm",
-          onPress: () => {
-            socket.emit("standUp", {
-              tableId: tableId,
-              userId: profile.supabase_id,
-              clubId: table.clubId, // The clubId this table belongs to
-            });
-            router.back(); // Take user back to the Lobby
-          },
+    Alert.alert("Stand Up", "Are you sure you want to leave your seat?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Confirm",
+        onPress: () => {
+          socketRef.current.emit("standUp", { tableId });
         },
-      ],
-    );
+      },
+    ]);
   };
+
+  const currentChips = myPlayer?.chips || 0;
+  const maxPossibleTopUp = (tableData?.maxBuyIn || 0) - currentChips;
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* HEADERBAR */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.leaveBtn} onPress={handleStandUp}>
-          <Text style={styles.leaveBtnText}>❮ STAND UP</Text>
+        <TouchableOpacity style={styles.iconBtn} onPress={() => router.back()}>
+          <Text style={styles.iconBtnText}>❮</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.topUpBtn}
-          onPress={() => setTopUpVisible(true)}
-        >
-          <Text style={styles.topUpText}>+ ADD CHIPS</Text>
-        </TouchableOpacity>
-        <Text style={styles.tableTitle}>Table #{id?.slice(-4)}</Text>
 
-        <TouchableOpacity
-          style={styles.historyBtn}
-          onPress={() => setIsHistoryVisible(true)}
-        >
-          <Text style={styles.historyBtnText}>History</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.menuBtn}>
-          <Text style={styles.menuIcon}>⚙️</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            onPress={() => setIsHistoryVisible(true)}
+            style={styles.iconBtn}
+          >
+            <Text style={styles.iconBtnText}>📋</Text>
+          </TouchableOpacity>
+
+          {myPlayer && (
+            <TouchableOpacity style={styles.standBtn} onPress={handleStandUp}>
+              <Text style={styles.standBtnText}>STAND</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            onPress={() => setTopUpVisible(true)}
+            style={styles.topUpBtn}
+          >
+            <Text style={styles.topUpText}>+ CHIPS</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => setSettingsVisible(true)}
+            style={styles.iconBtn}
+          >
+            <Text style={styles.iconBtnText}>⚙️</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
+      {/* GAME AREA */}
       <View style={styles.tableArea}>
         <View style={styles.tableBoundary}>
           <View style={styles.felt}>
@@ -260,6 +337,7 @@ export default function PokerTable() {
 
             {seatPositions.map((pos, index) => {
               const winnerData = winners.find((w) => w.seatIndex === index);
+              const isMe = myPlayer?.seatIndex === index;
               return (
                 <Seat
                   key={index}
@@ -269,57 +347,91 @@ export default function PokerTable() {
                   isDealer={tableData.dealerIndex === index}
                   isActing={tableData.actingIndex === index}
                   onPress={() => handleSeatPress(index)}
-                  myHand={myPlayer?.seatIndex === index ? myHand : null}
+                  myHand={isMe ? myHand : null}
                   currentStreet={tableData.currentStreet}
-                  socket={socket}
                   isWinner={!!winnerData}
                   winType={winnerData?.handName}
+                  activeGame={tableData.activeGame}
+                  isDiscarding={isMe && isDiscardMode}
+                  selectedCards={isMe ? discardSelection : []}
+                  onToggleCardSelection={handleToggleCardSelection}
                 />
               );
             })}
           </View>
         </View>
 
+        <ShowdownOverlay winners={winners} />
+
         <ActionButtons
           tableData={tableData}
           myPlayer={myPlayer}
-          socket={socket}
+          socket={socketRef.current}
+          settings={settings}
+          isDiscardMode={isDiscardMode}
+          discardSelection={discardSelection}
+          onConfirmDiscard={handleConfirmDiscard}
           onAction={(type, amount) => {
-            socket.emit("playerAction", {
-              tableId: id,
+            socketRef.current.emit("playerAction", {
+              tableId,
               actionType: type,
               amount,
             });
           }}
         />
 
-        {isMeTheDealer && !tableData.gameInProgress && (
+        {/* DEALER CHOICE OVERLAY */}
+        {isMeTheDealer && !tableData.gameInProgress && isMultiGame && (
           <View style={styles.dealerChoiceOverlay}>
-            <Text style={styles.choiceTitle}>SELECT GAME</Text>
+            <View style={styles.dealerChoiceHeader}>
+              <Text style={styles.choiceTitle}>DEALER'S CHOICE</Text>
+            </View>
             <View style={styles.choiceRow}>
-              {["Holdem", "PLO", "Pineapple"].map((game) => (
-                <TouchableOpacity
-                  key={game}
-                  onPress={() =>
-                    socket.emit("setGameType", { tableId: id, gameType: game })
-                  }
-                  style={styles.gameBtn}
-                >
-                  <Text style={styles.gameBtnText}>{game}</Text>
-                </TouchableOpacity>
-              ))}
+              {supportedGames.map((gameCode) => {
+                const info = getGameDisplayInfo(gameCode);
+                return (
+                  <TouchableOpacity
+                    key={gameCode}
+                    onPress={() => {
+                      socketRef.current.emit("setGameType", {
+                        tableId,
+                        gameType: gameCode,
+                      });
+                    }}
+                    style={[
+                      styles.gameBtn,
+                      tableData.activeGame === gameCode && styles.activeGameBtn,
+                    ]}
+                  >
+                    <Text style={styles.gameBtnType}>{gameCode}</Text>
+                    <Text style={styles.gameBtnDesc}>{info.name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
         )}
       </View>
+
+      {/* MODALS */}
+      <SettingsModal
+        visible={settingsVisible}
+        onClose={() => setSettingsVisible(false)}
+        settings={settings}
+        updateSettings={(k, v) => setSettings((s) => ({ ...s, [k]: v }))}
+      />
+
       <BuyInModal
         visible={topUpVisible}
         onClose={() => setTopUpVisible(false)}
-        onConfirm={handleTopUpConfirm}
-        tableMin={1} // Min can be as low as 1 gem
+        onConfirm={(amt) => {
+          socketRef.current.emit("topUp", { tableId, amount: parseInt(amt) });
+          setTopUpVisible(false);
+        }}
+        tableMin={1}
         tableMax={Math.min(userClubBalance, maxPossibleTopUp)}
         userBalance={userClubBalance}
-        title="TOP UP CHIPS"
+        title="TOP UP"
       />
 
       <HandHistory
@@ -328,38 +440,30 @@ export default function PokerTable() {
         history={history}
       />
 
-      {/* Buy-in Modal (Simplified here for space, keep your original) */}
       <Modal visible={buyInModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.buyInBox}>
             <Text style={styles.modalTitle}>
               SIT AT SEAT {selectedSeat + 1}
             </Text>
-
-            {/* Show available balance */}
             <Text style={styles.balanceText}>
-              Available: ${user?.balance?.toLocaleString() || "0"}
+              Available: {userClubBalance} Gems
             </Text>
-
             <TextInput
               style={styles.input}
               keyboardType="numeric"
               value={buyInAmount}
               onChangeText={setBuyInAmount}
-              placeholder="Enter Amount"
-              placeholderTextColor="#666"
+              placeholder="Amount"
+              placeholderTextColor="#444"
             />
-
             <View style={styles.modalActions}>
               <TouchableOpacity onPress={() => setBuyInModalVisible(false)}>
                 <Text style={styles.cancelText}>CANCEL</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={confirmSitDown}
-                style={[
-                  styles.confirmBtn,
-                  { opacity: parseInt(buyInAmount) > user?.balance ? 0.5 : 1 },
-                ]}
+                style={styles.confirmBtn}
               >
                 <Text style={styles.confirmText}>BUY IN</Text>
               </TouchableOpacity>
@@ -372,142 +476,130 @@ export default function PokerTable() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
+  container: { flex: 1, backgroundColor: "#000" },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
-    padding: SPACING.md,
-    alignItems: "center",
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    backgroundColor: "#111",
+    zIndex: 10,
   },
-  leaveText: { color: COLORS.textSecondary, fontWeight: "bold" },
-  tableTitle: { color: COLORS.primary, fontWeight: "bold", letterSpacing: 1 },
-  historyBtn: {
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: RADIUS.sm,
+  headerActions: { flexDirection: "row", alignItems: "center" },
+  iconBtn: { padding: 10 },
+  iconBtnText: { color: "#FFF", fontSize: 18 },
+  standBtn: {
+    backgroundColor: "#333",
+    padding: 8,
+    borderRadius: 4,
+    marginRight: 10,
   },
-  historyBtnText: {
-    color: COLORS.primary,
-    fontWeight: "bold",
-    fontSize: 12,
+  standBtnText: { color: "#FFF", fontSize: 10, fontWeight: "bold" },
+  topUpBtn: {
+    backgroundColor: COLORS.primary,
+    padding: 8,
+    borderRadius: 4,
+    marginRight: 10,
   },
-  tableArea: { flex: 1, justifyContent: "center", alignItems: "center" },
+  topUpText: { color: "#000", fontSize: 10, fontWeight: "bold" },
+  tableArea: { flex: 1, justifyContent: "center" },
   tableBoundary: {
-    width: width * 0.95,
-    aspectRatio: 0.65,
-    backgroundColor: COLORS.wood || "#3d2b1f",
+    width: width * 0.98,
+    aspectRatio: 0.7,
+    backgroundColor: "#2e1d12",
     borderRadius: 200,
-    padding: 10,
+    padding: 8,
+    alignSelf: "center",
+    borderWidth: 4,
+    borderColor: "#1a100a",
   },
   felt: {
     flex: 1,
-    backgroundColor: COLORS.felt || "#1a4a1a",
+    backgroundColor: "#143d14",
     borderRadius: 190,
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.1)",
-    position: "relative",
     justifyContent: "center",
     alignItems: "center",
+    overflow: "hidden",
   },
-  centerInfo: {
-    position: "absolute",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "100%",
-  },
+  centerInfo: { position: "absolute", zIndex: 1 },
   dealerChoiceOverlay: {
     position: "absolute",
-    bottom: 100,
-    backgroundColor: "rgba(0,0,0,0.9)",
-    padding: SPACING.lg,
-    borderRadius: RADIUS.lg,
-    alignItems: "center",
+    top: "25%",
+    width: "85%",
+    backgroundColor: "rgba(0,0,0,0.95)",
+    padding: 20,
+    borderRadius: 15,
     borderWidth: 1,
     borderColor: COLORS.primary,
+    alignSelf: "center",
+    zIndex: 200,
   },
   choiceTitle: {
     color: COLORS.primary,
+    textAlign: "center",
     fontWeight: "bold",
-    marginBottom: SPACING.md,
+    marginBottom: 15,
   },
-  choiceRow: { flexDirection: "row" },
+  choiceRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+  },
   gameBtn: {
     backgroundColor: "#222",
-    padding: 12,
-    borderRadius: RADIUS.md,
-    marginHorizontal: 5,
+    padding: 10,
+    margin: 5,
+    borderRadius: 8,
+    minWidth: 80,
+    alignItems: "center",
   },
-  gameBtnText: { color: "#fff", fontWeight: "bold" },
+  activeGameBtn: { borderColor: COLORS.primary, borderWidth: 1 },
+  gameBtnType: { color: COLORS.primary, fontWeight: "bold" },
+  gameBtnDesc: { color: "#888", fontSize: 8 },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.8)",
+    backgroundColor: "rgba(0,0,0,0.85)",
     justifyContent: "center",
     alignItems: "center",
   },
   buyInBox: {
-    backgroundColor: "#222",
+    backgroundColor: "#1A1A1A",
     padding: 25,
     borderRadius: 15,
-    width: 300,
+    width: "80%",
   },
   modalTitle: {
     color: "#fff",
-    fontWeight: "bold",
     textAlign: "center",
-    marginBottom: 20,
+    fontWeight: "bold",
+    marginBottom: 5,
+  },
+  balanceText: {
+    color: COLORS.primary,
+    textAlign: "center",
+    fontSize: 12,
+    marginBottom: 15,
   },
   input: {
     backgroundColor: "#000",
-    color: COLORS.primary,
-    padding: 15,
-    borderRadius: 10,
+    color: "#fff",
+    padding: 12,
+    borderRadius: 8,
     textAlign: "center",
     fontSize: 20,
     marginBottom: 20,
   },
   modalActions: {
     flexDirection: "row",
-    justifyContent: "space-around",
+    justifyContent: "space-between",
     alignItems: "center",
   },
-  cancelText: { color: "#888", fontWeight: "bold" },
+  cancelText: { color: "#666" },
   confirmBtn: {
     backgroundColor: COLORS.primary,
     paddingVertical: 10,
-    paddingHorizontal: 20,
+    paddingHorizontal: 25,
     borderRadius: 8,
   },
   confirmText: { color: "#000", fontWeight: "bold" },
-  balanceText: {
-    color: "#aaa",
-    textAlign: "center",
-    fontSize: 12,
-    marginBottom: 10,
-  },
-  // Ensure your input text is visible
-  input: {
-    backgroundColor: "#000",
-    color: COLORS.primary,
-    padding: 15,
-    borderRadius: 10,
-    textAlign: "center",
-    fontSize: 22,
-    fontWeight: "bold",
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: "#333",
-  },
-  leaveBtn: {
-    backgroundColor: "#CC0000", // Red for "Exit"
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-  },
-  leaveBtnText: {
-    color: "#FFF",
-    fontWeight: "bold",
-    fontSize: 12,
-  },
 });

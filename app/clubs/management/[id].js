@@ -7,32 +7,52 @@ import {
   StyleSheet,
   Alert,
   Share,
+  ActivityIndicator,
+  RefreshControl,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { API_BASE, supabase } from "../../../api/config";
 import { COLORS, SPACING, RADIUS } from "../../../styles/theme";
-import { globalStyles } from "../../../styles/global";
 
 export default function ClubManagement() {
-  const { clubId } = useLocalSearchParams();
+  const { id: clubId } = useLocalSearchParams();
+  const router = useRouter();
   const [members, setMembers] = useState([]);
+  const [clubData, setClubData] = useState(null);
   const [userRole, setUserRole] = useState("member");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    fetchMembers();
-  }, []);
+    fetchClubAndMembers();
+  }, [clubId]);
 
-  const fetchMembers = async () => {
-    const res = await fetch(`${API_BASE}/clubs/${clubId}/members`);
-    const data = await res.json();
-    setMembers(data);
+  const fetchClubAndMembers = async () => {
+    try {
+      const clubRes = await fetch(`${API_BASE}/clubs/${clubId}`);
+      const cData = await clubRes.json();
+      setClubData(cData);
 
-    // Identify current user's role in this list
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const me = data.find((m) => m.supabase_id === user.id);
-    if (me) setUserRole(me.role);
+      const res = await fetch(`${API_BASE}/clubs/${clubId}/members`);
+      const data = await res.json();
+      setMembers(data);
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const me = data.find((m) => m.supabase_id === user.id);
+      if (me) setUserRole(me.role);
+    } catch (error) {
+      console.error("Management fetch error:", error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchClubAndMembers();
   };
 
   const handleRoleChange = async (targetUserId, newRole) => {
@@ -40,227 +60,204 @@ export default function ClubManagement() {
       data: { user },
     } = await supabase.auth.getUser();
 
-    Alert.alert(
-      "Confirm Promotion",
-      `Are you sure you want to make this user a ${newRole}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Promote",
-          onPress: async () => {
-            try {
-              const response = await fetch(
-                `${API_BASE}/clubs/${clubId}/members/role`,
-                {
-                  method: "PATCH",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    targetUserId,
-                    newRole,
-                    requesterSupabaseId: user.id,
-                  }),
-                },
-              );
+    Alert.alert("Confirm Role Change", `Make this user a ${newRole}?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Confirm",
+        onPress: async () => {
+          try {
+            const response = await fetch(
+              `${API_BASE}/clubs/${clubId}/members/role`,
+              {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  targetUserId,
+                  newRole,
+                  requesterSupabaseId: user.id,
+                }),
+              },
+            );
 
-              const result = await response.json();
-              if (response.ok) {
-                Alert.alert("Success", result.message);
-                fetchMembers(); // Refresh the list
-              } else {
-                Alert.alert("Error", result.message);
-              }
-            } catch (error) {
-              Alert.alert("Error", "Network error while promoting member.");
+            if (response.ok) {
+              Alert.alert("Success", "Role updated.");
+              fetchClubAndMembers();
             }
-          },
+          } catch (error) {
+            Alert.alert("Error", "Network error.");
+          }
         },
-      ],
-    );
-  };
-
-  const renderMemberItem = ({ item }) => {
-    const isMe = item.userId === currentMongoUserId; // You'll need to store this
-    const isTargetStaff = item.role === "owner" || item.role === "manager";
-
-    const canManage =
-      (userRole === "owner" && !isMe) ||
-      (userRole === "manager" && !isTargetStaff);
+      },
+    ]);
   };
 
   const handleRemove = (targetUserId, username) => {
-    Alert.alert(
-      "Remove Member",
-      `Are you sure you want to remove ${username} from the club? They will be able to rejoin if they have the invite code.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const {
-                data: { user },
-              } = await supabase.auth.getUser();
-
-              const response = await fetch(
-                `${API_BASE}/clubs/${clubId}/members/remove`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    targetUserId,
-                    requesterSupabaseId: user.id,
-                  }),
-                },
-              );
-
-              const result = await response.json();
-
-              if (response.ok) {
-                Alert.alert("Success", "Member removed.");
-                // Refresh the list to reflect the change
-                fetchMembers();
-              } else {
-                Alert.alert(
-                  "Error",
-                  result.message || "Failed to remove member.",
-                );
-              }
-            } catch (error) {
-              console.error("Remove Error:", error);
-              Alert.alert("Error", "Could not connect to the server.");
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  const handleBlock = (targetUserId, username) => {
-    Alert.alert(
-      "BLOCK USER",
-      `Are you sure you want to block ${username}? They will be removed and unable to re-join with the invite code.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "BLOCK",
-          style: "destructive",
-          onPress: async () => {
+    Alert.alert("Remove Member", `Remove ${username} from the club?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: async () => {
+          try {
             const {
               data: { user },
             } = await supabase.auth.getUser();
-            const response = await fetch(`${API_BASE}/clubs/${clubId}/block`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                targetUserId,
-                requesterSupabaseId: user.id,
-              }),
-            });
+            const response = await fetch(
+              `${API_BASE}/clubs/${clubId}/members/remove`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  targetUserId,
+                  requesterSupabaseId: user.id,
+                }),
+              },
+            );
 
             if (response.ok) {
-              Alert.alert("Success", "User has been blacklisted.");
-              fetchMembers();
+              Alert.alert("Success", "Member removed.");
+              fetchClubAndMembers();
             }
-          },
+          } catch (error) {
+            Alert.alert("Error", "Server error.");
+          }
         },
-      ],
-    );
+      },
+    ]);
   };
 
   const onShareInvite = async () => {
     try {
-      const result = await Share.share({
-        message: `Join my private Dealer's Choice poker club! \n\nInvite Code: ${clubData.inviteCode}`,
-        title: "Club Invitation", // For iOS
+      await Share.share({
+        message: `Join my private Dealer's Choice poker club! \n\nInvite Code: ${clubData?.inviteCode}`,
       });
-
-      if (result.action === Share.sharedAction) {
-        if (result.activityType) {
-          // shared with activity type of result.activityType
-        } else {
-          // shared
-        }
-      } else if (result.action === Share.dismissedAction) {
-        // dismissed
-      }
     } catch (error) {
-      Alert.alert("Error", "Could not open the share menu.");
+      Alert.alert("Error", "Could not open share menu.");
     }
   };
 
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Member Management</Text>
-      {(userRole === "owner" || userRole === "manager") && (
+  const renderHeader = () => (
+    <View style={styles.headerSection}>
+      <Text style={styles.title}>{clubData?.name || "Club Management"}</Text>
+
+      <View style={styles.dashboardGrid}>
+        <TouchableOpacity
+          style={styles.dashCard}
+          onPress={() => router.push(`/clubs/management/logs/${clubId}`)}
+        >
+          <Text style={styles.dashIcon}>📜</Text>
+          <Text style={styles.dashLabel}>Audit Logs</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.dashCard}
+          onPress={() => router.push(`/clubs/management/settings/${clubId}`)}
+        >
+          <Text style={styles.dashIcon}>⚙️</Text>
+          <Text style={styles.dashLabel}>Settings</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* NEW: Table Management Section */}
+      <TouchableOpacity
+        style={styles.wideDashCard}
+        onPress={() =>
+          router.push(`/clubs/management/tables/create?clubId=${clubId}`)
+        }
+      >
+        <Text style={styles.dashIcon}>♠️</Text>
+        <View style={{ marginLeft: 15 }}>
+          <Text style={styles.dashLabel}>Create New Table</Text>
+          <Text style={styles.dashSublabel}>Start a new cash game</Text>
+        </View>
+      </TouchableOpacity>
+
+      {(userRole === "owner" || userRole === "manager") && clubData && (
         <View style={styles.shareContainer}>
           <View style={styles.codeDisplay}>
-            <Text style={styles.label}>CLUB INVITE CODE</Text>
+            <Text style={styles.label}>INVITE CODE</Text>
             <Text style={styles.codeText}>{clubData.inviteCode}</Text>
           </View>
-
-          <TouchableOpacity
-            style={styles.shareIconButton}
-            onPress={onShareInvite}
-          >
-            <Text style={styles.shareBtnText}>SHARE CODE</Text>
+          <TouchableOpacity style={styles.shareBtn} onPress={onShareInvite}>
+            <Text style={styles.shareBtnText}>SHARE</Text>
           </TouchableOpacity>
         </View>
       )}
+
+      <Text style={styles.sectionSubtitle}>
+        Club Members ({members.length})
+      </Text>
+    </View>
+  );
+
+  if (loading)
+    return <ActivityIndicator style={{ flex: 1 }} color={COLORS.primary} />;
+
+  return (
+    <View style={styles.container}>
       <FlatList
         data={members}
         keyExtractor={(item) => item.userId}
-        renderItem={({ item }) => (
-          <View style={styles.memberCard}>
-            <View>
-              <Text style={styles.username}>{item.username}</Text>
-              <Text
-                style={[
-                  styles.roleTag,
-                  isTargetStaff && { color: COLORS.primary },
-                ]}
+        ListHeaderComponent={renderHeader}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={COLORS.primary}
+          />
+        }
+        renderItem={({ item }) => {
+          const isTargetStaff =
+            item.role === "owner" || item.role === "manager";
+          const canManage =
+            (userRole === "owner" && item.role !== "owner") ||
+            (userRole === "manager" && !isTargetStaff);
+
+          return (
+            <View style={styles.memberCard}>
+              <TouchableOpacity
+                style={styles.memberInfo}
+                onPress={() =>
+                  router.push(
+                    `/clubs/management/members/${item.userId}?clubId=${clubId}`,
+                  )
+                }
               >
-                {item.role.toUpperCase()}
-              </Text>
-            </View>
+                <Text style={styles.username}>{item.username}</Text>
+                <Text
+                  style={[
+                    styles.roleTag,
+                    isTargetStaff && { color: COLORS.primary },
+                  ]}
+                >
+                  {item.role.toUpperCase()} • {item.gems || 0} 💎
+                </Text>
+              </TouchableOpacity>
 
-            {canManage && (
-              <View style={styles.actionColumn}>
+              {canManage && (
                 <View style={styles.actionsRow}>
-                  {/* Only Owners see Role Promotion */}
-                  {userRole === "owner" && (
-                    <TouchableOpacity
-                      onPress={() =>
-                        handleRoleChange(
-                          item.userId,
-                          item.role === "manager" ? "member" : "manager",
-                        )
-                      }
-                    >
-                      <Text style={styles.actionText}>
-                        {item.role === "manager" ? "DEMOTE" : "PROMOTE"}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-
                   <TouchableOpacity
-                    style={styles.removeBtn}
+                    onPress={() =>
+                      handleRoleChange(
+                        item.userId,
+                        item.role === "manager" ? "member" : "manager",
+                      )
+                    }
+                  >
+                    <Text style={styles.actionText}>
+                      {item.role === "manager" ? "DEMOTE" : "PROMOTE"}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
                     onPress={() => handleRemove(item.userId, item.username)}
                   >
-                    <Text style={styles.removeBtnText}>REMOVE</Text>
+                    <Text style={styles.dangerActionText}>KICK</Text>
                   </TouchableOpacity>
                 </View>
-
-                <TouchableOpacity
-                  style={styles.blockBtn}
-                  onPress={() => handleBlock(item.userId)}
-                >
-                  <Text style={styles.blockText}>BLOCK USER</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-        )}
+              )}
+            </View>
+          );
+        }}
       />
     </View>
   );
@@ -270,55 +267,98 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
-    padding: SPACING.lg,
+    paddingHorizontal: SPACING.md,
   },
+  headerSection: { paddingTop: 60 },
   title: {
     color: COLORS.textMain,
-    fontSize: 22,
-    fontWeight: "bold",
+    fontSize: 24,
+    fontWeight: "900",
+    marginBottom: SPACING.md,
+  },
+  dashboardGrid: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: SPACING.md,
+  },
+  dashCard: {
+    backgroundColor: "#1A1A1A",
+    width: "48%",
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#333",
+  },
+  wideDashCard: {
+    backgroundColor: "#1A1A1A",
+    width: "100%",
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: COLORS.primary,
     marginBottom: SPACING.lg,
+  },
+  dashIcon: { fontSize: 24 },
+  dashLabel: { color: "#FFF", fontSize: 13, fontWeight: "bold" },
+  dashSublabel: { color: "#666", fontSize: 11 },
+  shareContainer: {
+    flexDirection: "row",
+    backgroundColor: "#000",
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
+    alignItems: "center",
+    marginBottom: SPACING.lg,
+    borderWidth: 1,
+    borderColor: "#222",
+  },
+  codeDisplay: { flex: 1 },
+  label: { color: "#666", fontSize: 10, fontWeight: "bold" },
+  codeText: {
+    color: COLORS.primary,
+    fontSize: 18,
+    fontWeight: "bold",
+    letterSpacing: 2,
+  },
+  shareBtn: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    borderRadius: RADIUS.sm,
+  },
+  shareBtnText: { color: "#000", fontWeight: "bold", fontSize: 12 },
+  sectionSubtitle: {
+    color: "#666",
+    fontSize: 12,
+    fontWeight: "bold",
+    marginBottom: 10,
     textTransform: "uppercase",
-    letterSpacing: 1,
   },
   memberCard: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center", // Ensures vertical alignment
-    backgroundColor: "#151515", // Dark card background
+    alignItems: "center",
+    backgroundColor: "#151515",
     padding: SPACING.md,
     borderRadius: RADIUS.md,
     marginBottom: SPACING.sm,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.05)",
   },
-  username: {
-    color: COLORS.textMain,
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  roleTag: {
-    color: COLORS.primary, // Gold text for roles
-    fontSize: 10,
-    fontWeight: "900",
-    marginTop: 4,
-    textTransform: "uppercase",
-  },
-  actions: {
-    flexDirection: "row",
-    // Note: 'gap' works in modern React Native, but for backwards compatibility:
-    // alignItems: 'center'
-  },
+  memberInfo: { flex: 1 },
+  username: { color: COLORS.textMain, fontSize: 16, fontWeight: "bold" },
+  roleTag: { color: "#AAA", fontSize: 10, fontWeight: "900", marginTop: 4 },
+  actionsRow: { flexDirection: "row", alignItems: "center" },
   actionText: {
     color: COLORS.primary,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "bold",
-    marginLeft: SPACING.md, // Replaces gap for older RN versions if needed
+    marginLeft: 15,
   },
-  // Added a specific style for critical actions (Kick/Ban)
   dangerActionText: {
-    color: COLORS.error,
-    fontSize: 12,
+    color: "#FF5252",
+    fontSize: 11,
     fontWeight: "bold",
-    marginLeft: SPACING.md,
+    marginLeft: 15,
   },
 });
