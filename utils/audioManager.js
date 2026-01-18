@@ -1,6 +1,6 @@
 import { Audio } from "expo-av";
 
-const sounds = {
+/*const sounds = {
   cardSlide: require("../assets/sounds/card-slide.mp3"),
   cardFlip: require("../assets/sounds/card-flip.mp3"),
   chips: require("../assets/sounds/chips-clack.mp3"),
@@ -26,3 +26,4 @@ export const playSound = async (soundKey) => {
     console.log("Audio play error", error);
   }
 };
+*/

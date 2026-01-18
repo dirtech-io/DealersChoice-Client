@@ -9,7 +9,7 @@ import {
   Alert,
 } from "react-native";
 import Slider from "@react-native-community/slider"; // You may need to: npx expo install @react-native-community/slider
-import { COLORS, SPACING, RADIUS } from "../styles/theme";
+import { COLORS, SPACING, RADIUS } from "../../styles/theme";
 
 export default function BuyInModal({
   visible,

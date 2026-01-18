@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React from "react";
 import {
   View,
   Text,
@@ -11,15 +11,18 @@ import {
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../api/config";
-import { useAuth } from "../context/auth"; // Using your context
+import { useAuth } from "../context/auth";
 
 import { COLORS, SPACING, RADIUS } from "../styles/theme";
 import { globalStyles } from "../styles/global";
+import MaterialIcons from "@expo/vector-icons/MaterialIcons";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
+import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 
 const { width } = Dimensions.get("window");
 
 export default function Dashboard() {
-  const { user, profile, loading } = useAuth(); // profile now comes from context
+  const { profile, loading } = useAuth();
   const router = useRouter();
 
   const handleLogout = async () => {
@@ -27,7 +30,6 @@ export default function Dashboard() {
     router.replace("/login");
   };
 
-  // If context is still loading the session or profile
   if (loading) {
     return (
       <View style={[styles.container, { justifyContent: "center" }]}>
@@ -76,23 +78,19 @@ export default function Dashboard() {
             style={styles.logoutIconButton}
             onPress={handleLogout}
           >
-            <Text style={styles.logoutIcon}>󰈆</Text>
+            <MaterialIcons name="logout" size={24} color={COLORS.primary} />
           </TouchableOpacity>
         </View>
 
+        {/* Updated Currency Row - Centered and Single Currency */}
         <View style={styles.currencyRow}>
           <View style={styles.currencyPill}>
-            <Text style={styles.currencyIcon}>💰</Text>
+            <Text style={styles.currencyIcon}>
+              <FontAwesome5 name="coins" size={24} color="gold" />
+            </Text>
             <Text style={styles.currencyValue}>
               {profile?.coins?.toLocaleString() ?? 0}
             </Text>
-            <TouchableOpacity style={styles.plusButton}>
-              <Text style={styles.plusText}>+</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.currencyPill}>
-            <Text style={styles.currencyIcon}>💎</Text>
-            <Text style={styles.currencyValue}>{profile?.gems ?? 0}</Text>
             <TouchableOpacity style={styles.plusButton}>
               <Text style={styles.plusText}>+</Text>
             </TouchableOpacity>
@@ -104,15 +102,15 @@ export default function Dashboard() {
         <View style={styles.row}>
           <MenuCard
             title="CLUBS"
-            subtitle="PRIVATE REALM"
+            subtitle="PRIVATE TABLES"
             icon="🏰"
             color="#4A90E2"
             onPress={() => router.push("/clubs/")}
           />
           <MenuCard
             title="POKER"
-            subtitle="HIGH STAKES"
-            icon="🔥"
+            subtitle="PUBLIC TABLES"
+            icon="🃏"
             color="#E2B43B"
             onPress={() => router.push("/poker-lobby")}
           />
@@ -122,14 +120,14 @@ export default function Dashboard() {
           <MenuCard
             title="CASINO"
             subtitle="SLOTS & MORE"
-            icon="💎"
+            icon="🎰"
             color="#D0021B"
             onPress={() => {}}
           />
           <MenuCard
-            title="EVENTS"
-            subtitle="MISSIONS"
-            icon="🏆"
+            title="OTHER GAMES"
+            subtitle="COMING SOON"
+            icon="♠️"
             color="#7ED321"
             onPress={() => {}}
           />
@@ -164,7 +162,7 @@ const styles = StyleSheet.create({
   },
   gamifiedHeader: {
     padding: SPACING.md,
-    backgroundColor: "#151515", // Deep secondary background
+    backgroundColor: "#151515",
     borderBottomWidth: 2,
     borderBottomColor: "#252525",
   },
@@ -225,7 +223,7 @@ const styles = StyleSheet.create({
   },
   xpBar: {
     height: "100%",
-    backgroundColor: COLORS.raise, // Using standard 'Green' from theme
+    backgroundColor: COLORS.raise,
   },
   logoutIconButton: {
     padding: 5,
@@ -236,21 +234,21 @@ const styles = StyleSheet.create({
   },
   currencyRow: {
     flexDirection: "row",
-    justifyContent: "space-around",
+    justifyContent: "center", // Centered for cleaner look
   },
   currencyPill: {
     flexDirection: "row",
     backgroundColor: "#000",
-    paddingVertical: 5,
-    paddingHorizontal: SPACING.sm,
+    paddingVertical: 8,
+    paddingHorizontal: SPACING.md,
     borderRadius: RADIUS.round,
     alignItems: "center",
-    width: width * 0.4,
+    width: width * 0.5, // Slightly wider since it's the only one
     borderWidth: 1,
     borderColor: "#333",
   },
   currencyIcon: {
-    marginRight: 5,
+    marginRight: 8,
   },
   currencyValue: {
     color: COLORS.textMain,
@@ -279,28 +277,34 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.md,
   },
   card: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "rgba(41,42,51,1)",
     width: "48%",
     height: 120,
     borderRadius: RADIUS.lg,
     padding: SPACING.md,
     justifyContent: "space-between",
+    alignItems: "center",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.05)",
+    textAlign: "center",
   },
   cardIcon: {
     fontSize: 24,
+    textAlign: "center",
   },
   cardTitle: {
     color: COLORS.textMain,
     fontWeight: "900",
     fontSize: 18,
+    textAlign: "center",
   },
   cardSubtitle: {
     color: COLORS.textSecondary,
     fontSize: 10,
     fontWeight: "bold",
+    textAlign: "center",
   },
+
   dailyBonus: {
     backgroundColor: "#252525",
     padding: SPACING.lg,

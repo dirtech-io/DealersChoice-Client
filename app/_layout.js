@@ -3,6 +3,7 @@ import { Stack, useRouter, Slot } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { AuthProvider, useAuth } from "../context/auth";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SocketProvider } from "../context/SocketContext";
 
 // 1. Import the font hooks and specific weights
 import { useFonts, Cinzel_700Bold } from "@expo-google-fonts/cinzel";
@@ -17,9 +18,9 @@ export default function RootLayout() {
     InterRegular: Inter_400Regular,
     InterBold: Inter_700Bold,
   });
-  useEffect(() => {
+  /* useEffect(() => {
     loadPokerSounds();
-  }, []);
+  }, []);*/
 
   useEffect(() => {
     if (fontsLoaded || fontError) {
@@ -52,7 +53,9 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <AuthGate />
+        <SocketProvider>
+          <AuthGate />
+        </SocketProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

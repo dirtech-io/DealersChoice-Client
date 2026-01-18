@@ -68,7 +68,7 @@ export default function Login() {
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
         <Text style={styles.title}>DEALER'S CHOICE</Text>
-        <Text style={styles.subtitle}>Enter the Arena</Text>
+        <Text style={styles.subtitle}>Own The Deck</Text>
 
         <TextInput
           style={styles.input}

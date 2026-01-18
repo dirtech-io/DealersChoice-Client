@@ -1,7 +1,7 @@
 export const COLORS = {
   // Primary Brand Colors
-  primary: "#E2B43B", // Gold/Dealer color
-  primaryDark: "#b8860b",
+  primary: "rgba(191, 32, 17, 1)",
+  primaryDark: "rgba(110, 22, 10, 1)",
 
   // Table Colors
   felt: "#0a4d1c",
