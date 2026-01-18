@@ -10,8 +10,6 @@ import {
   Text,
   StyleSheet,
   Dimensions,
-  Modal,
-  TextInput,
   Alert,
   TouchableOpacity,
   SafeAreaView,
@@ -36,7 +34,7 @@ import { playSound } from "../../../utils/audioManager";
 const { width } = Dimensions.get("window");
 
 export default function PokerTable() {
-  const { profile } = useAuth();
+  const { profile, updateClubBalance } = useAuth();
   const { id: tableId } = useLocalSearchParams();
   const router = useRouter();
   const socketRef = useRef(null);
@@ -55,6 +53,8 @@ export default function PokerTable() {
     lastMessage: "CONNECTING...",
     clubId: null,
     supportedGameTypes: [],
+    minBuyIn: 100, // Default fallbacks
+    maxBuyIn: 1000,
   });
 
   const [settings, setSettings] = useState({
@@ -63,7 +63,6 @@ export default function PokerTable() {
     autoMuck: false,
   });
 
-  // Discard System State
   const [isDiscardMode, setIsDiscardMode] = useState(false);
   const [discardSelection, setDiscardSelection] = useState([]);
   const [discardRequirement, setDiscardRequirement] = useState({
@@ -74,7 +73,7 @@ export default function PokerTable() {
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [selectedSeat, setSelectedSeat] = useState(null);
   const [buyInModalVisible, setBuyInModalVisible] = useState(false);
-  const [buyInAmount, setBuyInAmount] = useState("200");
+
   const [myHand, setMyHand] = useState([]);
   const [winners, setWinners] = useState([]);
   const [history, setHistory] = useState([]);
@@ -97,12 +96,21 @@ export default function PokerTable() {
     return mapping[code] || { name: code, cards: "?" };
   };
 
+  /**
+   * Pulls the specific club balance from the profile.gems array
+   * Handles Decimal128 conversion.
+   */
   const userClubBalance = useMemo(() => {
-    if (!profile?.Gems || !tableData.clubId) return 0;
-    const entry = profile.Gems.find(
+    if (!profile?.gems || !tableData.clubId) return 0;
+    const entry = profile.gems.find(
       (g) => g.clubId.toString() === tableData.clubId.toString(),
     );
-    return entry ? entry.balance : 0;
+    if (!entry) return 0;
+
+    // Handle Decimal128 object vs raw number
+    return entry.balance?.$numberDecimal
+      ? parseFloat(entry.balance.$numberDecimal)
+      : parseFloat(entry.balance);
   }, [profile, tableData.clubId]);
 
   const seatPositions = [
@@ -129,7 +137,6 @@ export default function PokerTable() {
 
   // --- 3. SOCKET LOGIC ---
   useEffect(() => {
-    // Replace with your actual server URL or environment variable
     socketRef.current = io(`http://192.168.1.94:3000`, {
       transports: ["websocket"],
       query: { userId: profile?.supabase_id },
@@ -170,7 +177,7 @@ export default function PokerTable() {
 
     socket.on("privateHand", (cards) => {
       setMyHand(cards);
-      setDiscardSelection([]); // Clear selections when new cards arrive
+      setDiscardSelection([]);
     });
 
     socket.on("requestDiscard", ({ count, type }) => {
@@ -192,80 +199,37 @@ export default function PokerTable() {
       setBuyInModalVisible(false);
     });
 
-    socket.on("gameTypeChanged", ({ gameType, dealerName }) => {
-      if (settings.soundEnabled) playSound("shuffle");
-    });
-
     return () => {
       socket.emit("leaveTable", { tableId });
       socket.disconnect();
     };
-  }, [
-    tableId,
-    settings.hapticsEnabled,
-    settings.soundEnabled,
-    profile?.supabase_id,
-  ]);
+  }, [tableId, settings.hapticsEnabled, profile?.supabase_id]);
 
   // --- 4. HANDLERS ---
-  const handleToggleCardSelection = useCallback(
-    (cardIndex) => {
-      if (!isDiscardMode) return;
-
-      setDiscardSelection((prev) => {
-        const isSelected = prev.includes(cardIndex);
-        if (isSelected) {
-          return prev.filter((i) => i !== cardIndex);
-        } else {
-          // Validation logic for MAX/EXACT
-          if (
-            discardRequirement.type !== "ANY" &&
-            prev.length >= discardRequirement.count
-          ) {
-            return prev;
-          }
-          if (settings.hapticsEnabled) Haptics.selectionAsync();
-          return [...prev, cardIndex];
-        }
-      });
-    },
-    [isDiscardMode, discardRequirement, settings.hapticsEnabled],
-  );
-
-  const handleConfirmDiscard = () => {
-    if (
-      discardRequirement.type === "EXACT" &&
-      discardSelection.length !== discardRequirement.count
-    ) {
-      return Alert.alert(
-        "Error",
-        `Select exactly ${discardRequirement.count} cards.`,
-      );
-    }
-
-    socketRef.current.emit("discardCards", {
-      tableId,
-      indices: discardSelection,
-    });
-  };
-
   const handleSeatPress = (index) => {
     if (tableData.players[index] || myPlayer) return;
     setSelectedSeat(index);
     setBuyInModalVisible(true);
   };
 
-  const confirmSitDown = () => {
-    const amount = parseInt(buyInAmount);
-    if (isNaN(amount) || amount <= 0) return Alert.alert("Invalid Amount");
-    if (userClubBalance < amount) return Alert.alert("Insufficient Gems");
+  const onConfirmBuyIn = (amount) => {
+    // 1. Update UI Optimistically to prevent double buy-ins
+    updateClubBalance(tableData.clubId, amount);
 
+    // 2. Emit to Server
     socketRef.current.emit("sitDown", {
       tableId,
       seatIndex: selectedSeat,
       buyIn: amount,
     });
+
     setBuyInModalVisible(false);
+  };
+
+  const onConfirmTopUp = (amount) => {
+    updateClubBalance(tableData.clubId, amount);
+    socketRef.current.emit("topUp", { tableId, amount });
+    setTopUpVisible(false);
   };
 
   const handleStandUp = () => {
@@ -326,7 +290,6 @@ export default function PokerTable() {
         <View style={styles.tableBoundary}>
           <View style={styles.felt}>
             <DealerMessage message={tableData?.lastMessage} />
-
             <View style={styles.centerInfo}>
               <CommunityCards
                 cards={tableData.communityCards}
@@ -354,7 +317,14 @@ export default function PokerTable() {
                   activeGame={tableData.activeGame}
                   isDiscarding={isMe && isDiscardMode}
                   selectedCards={isMe ? discardSelection : []}
-                  onToggleCardSelection={handleToggleCardSelection}
+                  onToggleCardSelection={(i) => {
+                    if (!isDiscardMode) return;
+                    setDiscardSelection((prev) =>
+                      prev.includes(i)
+                        ? prev.filter((c) => c !== i)
+                        : [...prev, i],
+                    );
+                  }}
                 />
               );
             })}
@@ -370,7 +340,12 @@ export default function PokerTable() {
           settings={settings}
           isDiscardMode={isDiscardMode}
           discardSelection={discardSelection}
-          onConfirmDiscard={handleConfirmDiscard}
+          onConfirmDiscard={() => {
+            socketRef.current.emit("discardCards", {
+              tableId,
+              indices: discardSelection,
+            });
+          }}
           onAction={(type, amount) => {
             socketRef.current.emit("playerAction", {
               tableId,
@@ -380,40 +355,33 @@ export default function PokerTable() {
           }}
         />
 
-        {/* DEALER CHOICE OVERLAY */}
         {isMeTheDealer && !tableData.gameInProgress && isMultiGame && (
           <View style={styles.dealerChoiceOverlay}>
-            <View style={styles.dealerChoiceHeader}>
-              <Text style={styles.choiceTitle}>DEALER'S CHOICE</Text>
-            </View>
+            <Text style={styles.choiceTitle}>DEALER'S CHOICE</Text>
             <View style={styles.choiceRow}>
-              {supportedGames.map((gameCode) => {
-                const info = getGameDisplayInfo(gameCode);
-                return (
-                  <TouchableOpacity
-                    key={gameCode}
-                    onPress={() => {
-                      socketRef.current.emit("setGameType", {
-                        tableId,
-                        gameType: gameCode,
-                      });
-                    }}
-                    style={[
-                      styles.gameBtn,
-                      tableData.activeGame === gameCode && styles.activeGameBtn,
-                    ]}
-                  >
-                    <Text style={styles.gameBtnType}>{gameCode}</Text>
-                    <Text style={styles.gameBtnDesc}>{info.name}</Text>
-                  </TouchableOpacity>
-                );
-              })}
+              {supportedGames.map((gameCode) => (
+                <TouchableOpacity
+                  key={gameCode}
+                  onPress={() =>
+                    socketRef.current.emit("setGameType", {
+                      tableId,
+                      gameType: gameCode,
+                    })
+                  }
+                  style={[
+                    styles.gameBtn,
+                    tableData.activeGame === gameCode && styles.activeGameBtn,
+                  ]}
+                >
+                  <Text style={styles.gameBtnType}>{gameCode}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
           </View>
         )}
       </View>
 
-      {/* MODALS */}
+      {/* REUSABLE MODALS */}
       <SettingsModal
         visible={settingsVisible}
         onClose={() => setSettingsVisible(false)}
@@ -422,16 +390,24 @@ export default function PokerTable() {
       />
 
       <BuyInModal
+        visible={buyInModalVisible}
+        onClose={() => setBuyInModalVisible(false)}
+        onConfirm={onConfirmBuyIn}
+        tableMin={tableData.minBuyIn}
+        tableMax={tableData.maxBuyIn}
+        clubId={tableData.clubId}
+        user={profile}
+      />
+
+      <BuyInModal
         visible={topUpVisible}
         onClose={() => setTopUpVisible(false)}
-        onConfirm={(amt) => {
-          socketRef.current.emit("topUp", { tableId, amount: parseInt(amt) });
-          setTopUpVisible(false);
-        }}
+        onConfirm={onConfirmTopUp}
         tableMin={1}
-        tableMax={Math.min(userClubBalance, maxPossibleTopUp)}
-        userBalance={userClubBalance}
-        title="TOP UP"
+        tableMax={maxPossibleTopUp}
+        clubId={tableData.clubId}
+        user={profile}
+        title="TOP UP CHIPS"
       />
 
       <HandHistory
@@ -439,38 +415,6 @@ export default function PokerTable() {
         onClose={() => setIsHistoryVisible(false)}
         history={history}
       />
-
-      <Modal visible={buyInModalVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.buyInBox}>
-            <Text style={styles.modalTitle}>
-              SIT AT SEAT {selectedSeat + 1}
-            </Text>
-            <Text style={styles.balanceText}>
-              Available: {userClubBalance} Gems
-            </Text>
-            <TextInput
-              style={styles.input}
-              keyboardType="numeric"
-              value={buyInAmount}
-              onChangeText={setBuyInAmount}
-              placeholder="Amount"
-              placeholderTextColor="#444"
-            />
-            <View style={styles.modalActions}>
-              <TouchableOpacity onPress={() => setBuyInModalVisible(false)}>
-                <Text style={styles.cancelText}>CANCEL</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={confirmSitDown}
-                style={styles.confirmBtn}
-              >
-                <Text style={styles.confirmText}>BUY IN</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -555,51 +499,4 @@ const styles = StyleSheet.create({
   },
   activeGameBtn: { borderColor: COLORS.primary, borderWidth: 1 },
   gameBtnType: { color: COLORS.primary, fontWeight: "bold" },
-  gameBtnDesc: { color: "#888", fontSize: 8 },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.85)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  buyInBox: {
-    backgroundColor: "#1A1A1A",
-    padding: 25,
-    borderRadius: 15,
-    width: "80%",
-  },
-  modalTitle: {
-    color: "#fff",
-    textAlign: "center",
-    fontWeight: "bold",
-    marginBottom: 5,
-  },
-  balanceText: {
-    color: COLORS.primary,
-    textAlign: "center",
-    fontSize: 12,
-    marginBottom: 15,
-  },
-  input: {
-    backgroundColor: "#000",
-    color: "#fff",
-    padding: 12,
-    borderRadius: 8,
-    textAlign: "center",
-    fontSize: 20,
-    marginBottom: 20,
-  },
-  modalActions: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  cancelText: { color: "#666" },
-  confirmBtn: {
-    backgroundColor: COLORS.primary,
-    paddingVertical: 10,
-    paddingHorizontal: 25,
-    borderRadius: 8,
-  },
-  confirmText: { color: "#000", fontWeight: "bold" },
 });

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -16,28 +16,53 @@ export default function BuyInModal({
   onConfirm,
   tableMin = 0,
   tableMax = 0,
-  userBalance = 0,
+  clubId,
+  user,
 }) {
-  // Determine the actual limits for the slider
-  const maxPossible = Math.min(tableMax, userBalance);
-  const canAffordMin = userBalance >= tableMin;
+  /**
+   * --- Pull Specific Club Gems Balance ---
+   * Adjusted to handle the gems array of objects and Decimal128 type
+   */
+  const clubBalance = useMemo(() => {
+    if (!user || !clubId || !user.gems) return 0;
+
+    // Find the gem object that matches the current clubId
+    const gemEntry = user.gems.find((g) => g.clubId === clubId);
+
+    if (!gemEntry || !gemEntry.balance) return 0;
+
+    // Handle MongoDB Decimal128 (often arrives as {$numberDecimal: "X"} or a string)
+    const rawValue = gemEntry.balance;
+    const numericBalance =
+      typeof rawValue === "object" && rawValue.$numberDecimal
+        ? parseFloat(rawValue.$numberDecimal)
+        : parseFloat(rawValue.toString());
+
+    return isNaN(numericBalance) ? 0 : numericBalance;
+  }, [user, clubId, visible]);
+
+  // Determine the actual limits for the slider based on table rules and user wallet
+  const maxPossible = Math.min(tableMax, clubBalance);
+  const canAffordMin = clubBalance >= tableMin;
 
   const [amount, setAmount] = useState(tableMin);
 
-  // Reset amount when modal opens to the highest possible value up to tableMax
+  // Reset amount when modal opens
   useEffect(() => {
     if (visible) {
-      setAmount(canAffordMin ? Math.min(tableMax, userBalance) : tableMin);
+      // Set to max affordable buy-in by default for a better UX
+      setAmount(canAffordMin ? maxPossible : tableMin);
     }
-  }, [visible, tableMin, tableMax, userBalance]);
+  }, [visible, tableMin, tableMax, clubBalance]);
 
   const handleConfirm = () => {
     if (!canAffordMin) {
       return Alert.alert(
         "Insufficient Balance",
-        "You don't have enough chips in your wallet to meet the minimum buy-in.",
+        `You need at least ${tableMin} Gems to sit. You currently have ${clubBalance.toFixed(2)} Gems in this club.`,
       );
     }
+    // We pass the floored value for sitting, but use precise math for balance checks
     onConfirm(Math.floor(amount));
   };
 
@@ -48,23 +73,26 @@ export default function BuyInModal({
           <Text style={styles.title}>TABLE BUY-IN</Text>
 
           <View style={styles.balanceInfo}>
-            <Text style={styles.balanceLabel}>YOUR BALANCE:</Text>
-            <Text style={styles.goldText}>${userBalance.toLocaleString()}</Text>
+            <Text style={styles.balanceLabel}>CLUB GEMS:</Text>
+            <Text style={styles.goldText}>
+              {clubBalance.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </Text>
           </View>
 
           <View style={styles.amountDisplay}>
-            <Text style={styles.currencySymbol}>$</Text>
             <Text style={styles.amountText}>
               {Math.floor(amount).toLocaleString()}
             </Text>
+            <Text style={styles.gemSuffix}>GEMS TO DEPOSIT</Text>
           </View>
 
           <Slider
             style={styles.slider}
             minimumValue={tableMin}
-            maximumValue={
-              maxPossible > tableMin ? maxPossible : tableMin + 0.01
-            }
+            maximumValue={maxPossible > tableMin ? maxPossible : tableMin + 0.1}
             step={1}
             value={amount}
             onValueChange={setAmount}
@@ -78,22 +106,35 @@ export default function BuyInModal({
             <TouchableOpacity
               onPress={() => setAmount(tableMin)}
               style={styles.quickSelect}
+              disabled={!canAffordMin}
             >
-              <Text style={styles.limitText}>MIN: ${tableMin}</Text>
+              <Text style={styles.limitText}>MIN: {tableMin}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => setAmount(maxPossible)}
               style={styles.quickSelect}
+              disabled={!canAffordMin}
             >
-              <Text style={styles.limitText}>MAX: ${maxPossible}</Text>
+              <Text
+                style={[
+                  styles.limitText,
+                  clubBalance < tableMax &&
+                    canAffordMin && { color: COLORS.primary },
+                ]}
+              >
+                {clubBalance < tableMax && canAffordMin
+                  ? `MY MAX: ${Math.floor(clubBalance)}`
+                  : `TABLE MAX: ${tableMax}`}
+              </Text>
             </TouchableOpacity>
           </View>
 
           {!canAffordMin && (
             <View style={styles.errorContainer}>
               <Text style={styles.errorText}>
-                Minimum buy-in is ${tableMin}. Please top up your balance.
+                Minimum buy-in is {tableMin} Gems.{"\n"}Please contact a club
+                manager to top up.
               </Text>
             </View>
           )}
@@ -118,7 +159,7 @@ export default function BuyInModal({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.9)",
+    backgroundColor: "rgba(0,0,0,0.92)",
     justifyContent: "center",
     alignItems: "center",
     padding: SPACING.lg,
@@ -136,7 +177,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: "#FFF",
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "900",
     letterSpacing: 2,
     marginBottom: 20,
@@ -144,11 +185,17 @@ const styles = StyleSheet.create({
   balanceInfo: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 30,
+    marginBottom: 20,
+    backgroundColor: "#000",
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#222",
   },
   balanceLabel: {
     color: "#888",
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: "bold",
     marginRight: 8,
   },
@@ -158,7 +205,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   amountDisplay: {
-    flexDirection: "row",
+    flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#000",
@@ -169,20 +216,19 @@ const styles = StyleSheet.create({
     borderColor: "#333",
     marginBottom: 10,
   },
-  currencySymbol: {
-    color: COLORS.primary,
-    fontSize: 24,
-    fontWeight: "900",
-    marginRight: 4,
-    marginTop: 4,
-  },
   amountText: {
     color: "#FFF",
-    fontSize: 42,
+    fontSize: 48,
     fontWeight: "900",
   },
+  gemSuffix: {
+    color: COLORS.primary,
+    fontSize: 10,
+    fontWeight: "bold",
+    marginTop: -5,
+  },
   slider: {
-    width: "110%", // Make slider slightly wider for easier thumb grabbing
+    width: "105%",
     height: 50,
   },
   limitRow: {
@@ -196,21 +242,24 @@ const styles = StyleSheet.create({
   },
   limitText: {
     color: "#AAA",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "700",
   },
   errorContainer: {
     backgroundColor: "rgba(255, 68, 68, 0.1)",
-    padding: 10,
+    padding: 12,
     borderRadius: RADIUS.sm,
     marginTop: 20,
     width: "100%",
+    borderWidth: 1,
+    borderColor: "rgba(255, 68, 68, 0.2)",
   },
   errorText: {
     color: "#FF4444",
-    fontSize: 13,
+    fontSize: 12,
     textAlign: "center",
     fontWeight: "600",
+    lineHeight: 18,
   },
   confirmBtn: {
     backgroundColor: COLORS.primary,
@@ -219,12 +268,9 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.md,
     marginTop: 25,
     alignItems: "center",
-    shadowColor: COLORS.primary,
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
   },
   disabledBtn: {
-    backgroundColor: "#333",
+    backgroundColor: "#222",
     opacity: 0.5,
   },
   confirmBtnText: {
@@ -240,7 +286,7 @@ const styles = StyleSheet.create({
   cancelText: {
     color: "#666",
     fontWeight: "bold",
-    fontSize: 14,
+    fontSize: 12,
     textTransform: "uppercase",
   },
 });

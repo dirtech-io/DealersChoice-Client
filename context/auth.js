@@ -18,7 +18,39 @@ export const AuthProvider = ({ children }) => {
       }
     } catch (error) {
       console.error("Error fetching MongoDB profile:", error);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  /**
+   * Optimistic UI Update:
+   * Updates a specific club balance in the local state immediately
+   * after a table buy-in or top-up.
+   */
+  const updateClubBalance = (clubId, amountToSubtract) => {
+    if (!profile || !profile.gems) return;
+
+    const updatedGems = profile.gems.map((gem) => {
+      if (gem.clubId === clubId) {
+        // Handle both Decimal128 objects and standard numbers
+        const currentBalance = gem.balance?.$numberDecimal
+          ? parseFloat(gem.balance.$numberDecimal)
+          : parseFloat(gem.balance);
+
+        const newBalance = currentBalance - amountToSubtract;
+
+        return {
+          ...gem,
+          balance: gem.balance?.$numberDecimal
+            ? { ...gem.balance, $numberDecimal: newBalance.toString() }
+            : newBalance,
+        };
+      }
+      return gem;
+    });
+
+    setProfile({ ...profile, gems: updatedGems });
   };
 
   useEffect(() => {
@@ -26,7 +58,6 @@ export const AuthProvider = ({ children }) => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
-
       if (currentUser) {
         fetchProfile(currentUser.id);
       } else {
@@ -34,31 +65,37 @@ export const AuthProvider = ({ children }) => {
       }
     });
 
-    // 2. Listen for Auth Changes (Login/Logout)
+    // 2. Listen for Auth Changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
-
       if (currentUser) {
         await fetchProfile(currentUser.id);
       } else {
         setProfile(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // Helpful for manually refreshing balance after a game or purchase
   const refreshProfile = () => {
     if (user) fetchProfile(user.id);
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, refreshProfile }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        profile,
+        loading,
+        refreshProfile,
+        updateClubBalance,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
