@@ -9,9 +9,9 @@ import {
   Share,
 } from "react-native";
 import { useLocalSearchParams } from "expo-router";
-import { API_BASE, supabase } from "../../api/config";
-import { COLORS, SPACING, RADIUS } from "../../styles/theme";
-import { globalStyles } from "../../styles/global";
+import { API_BASE, supabase } from "../../../api/config";
+import { COLORS, SPACING, RADIUS } from "../../../styles/theme";
+import { globalStyles } from "../../../styles/global";
 
 export default function ClubManagement() {
   const { clubId } = useLocalSearchParams();
@@ -59,7 +59,7 @@ export default function ClubManagement() {
                     newRole,
                     requesterSupabaseId: user.id,
                   }),
-                }
+                },
               );
 
               const result = await response.json();
@@ -74,7 +74,7 @@ export default function ClubManagement() {
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -111,7 +111,7 @@ export default function ClubManagement() {
                     targetUserId,
                     requesterSupabaseId: user.id,
                   }),
-                }
+                },
               );
 
               const result = await response.json();
@@ -123,7 +123,7 @@ export default function ClubManagement() {
               } else {
                 Alert.alert(
                   "Error",
-                  result.message || "Failed to remove member."
+                  result.message || "Failed to remove member.",
                 );
               }
             } catch (error) {
@@ -132,7 +132,7 @@ export default function ClubManagement() {
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -164,7 +164,7 @@ export default function ClubManagement() {
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -233,7 +233,7 @@ export default function ClubManagement() {
                       onPress={() =>
                         handleRoleChange(
                           item.userId,
-                          item.role === "manager" ? "member" : "manager"
+                          item.role === "manager" ? "member" : "manager",
                         )
                       }
                     >

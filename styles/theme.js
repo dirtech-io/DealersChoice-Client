@@ -1,7 +1,11 @@
 export const COLORS = {
   // Primary Brand Colors
-  primary: "rgba(191, 32, 17, 1)",
+  primary: "rgba(191, 32, 17,1)",
   primaryDark: "rgba(110, 22, 10, 1)",
+  primaryLight: "rgba(224, 62, 50,1)",
+  secondary: "rgba(10,125,230,1)",
+  secondaryDark: "rgba(10,70,180,1)",
+  secondaryLight: "rgba(30,165,240,1)",
 
   // Table Colors
   felt: "#0a4d1c",

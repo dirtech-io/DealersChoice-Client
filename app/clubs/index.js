@@ -90,7 +90,7 @@ export default function ClubsLobby() {
     if (!newClubName || customInviteCode.length !== 6) {
       Alert.alert(
         "Missing Info",
-        "Provide a club name and a 6-character code."
+        "Provide a club name and a 6-character code.",
       );
       return;
     }
@@ -113,7 +113,7 @@ export default function ClubsLobby() {
       if (response.ok) {
         Alert.alert(
           "Realm Established",
-          `Club Created! Code: ${data.club.inviteCode}`
+          `Club Created! Code: ${data.club.inviteCode}`,
         );
         setCreateModalVisible(false);
         setNewClubName("");
@@ -130,7 +130,7 @@ export default function ClubsLobby() {
   const renderClubItem = ({ item }) => (
     <TouchableOpacity
       style={styles.clubCard}
-      onPress={() => router.push(`/clubs/lobby?clubId=${item._id}`)}
+      onPress={() => router.push(`/clubs/lobby/${item._id}`)}
     >
       <View style={styles.clubIcon}>
         <Text style={styles.iconText}>🏢</Text>
@@ -186,7 +186,7 @@ export default function ClubsLobby() {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>
-              You haven't joined any poker realms yet.
+              You haven't joined any poker clubs yet.
             </Text>
           </View>
         }

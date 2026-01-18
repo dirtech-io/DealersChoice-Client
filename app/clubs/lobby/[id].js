@@ -15,12 +15,12 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { API_BASE, supabase } from "../../api/config";
-import { COLORS, SPACING, RADIUS } from "../../styles/theme";
-import { globalStyles } from "../../styles/global";
-import { useSocket } from "../../context/SocketContext";
-import BuyInModal from "../../components/poker/BuyInModal";
-import { useAuth } from "../../context/auth";
+import { API_BASE, supabase } from "../../../api/config";
+import { COLORS, SPACING, RADIUS } from "../../../styles/theme";
+import { globalStyles } from "../../../styles/global";
+import { useSocket } from "../../../context/SocketContext";
+import BuyInModal from "../../../components/poker/BuyInModal";
+import { useAuth } from "../../../context/auth";
 
 const { width } = Dimensions.get("window");
 
@@ -35,7 +35,7 @@ const GAME_VARIATIONS = [
 ];
 
 export default function PokerLobby() {
-  const { clubId } = useLocalSearchParams();
+  const { id: clubId } = useLocalSearchParams();
   const router = useRouter();
   const socket = useSocket();
   const { profile } = useAuth(); // Access global profile for Gems

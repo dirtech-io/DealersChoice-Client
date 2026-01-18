@@ -52,6 +52,7 @@ export default function PokerTable() {
   const [winners, setWinners] = useState([]);
   const [history, setHistory] = useState([]);
   const [isHistoryVisible, setIsHistoryVisible] = useState(false);
+  const [topUpVisible, setTopUpVisible] = useState(false);
 
   // Define seat positions inside the component or a constants file
   const seatPositions = [
@@ -156,6 +157,21 @@ export default function PokerTable() {
     setBuyInModalVisible(false);
   };
 
+  const handleTopUpConfirm = (amount) => {
+    socket.emit("topUp", {
+      tableId,
+      userId: profile.supabase_id,
+      clubId: tableData.clubId,
+      amount: parseInt(amount),
+    });
+    setTopUpVisible(false);
+  };
+
+  const currentChips =
+    tableData?.players?.find((p) => p?.userId === profile.supabase_id)?.chips ||
+    0;
+  const maxPossibleTopUp = (tableData?.maxBuyIn || 0) - currentChips;
+
   const handleLeave = () => {
     Alert.alert(
       "Leave Table",
@@ -173,13 +189,49 @@ export default function PokerTable() {
     );
   };
 
+  const handleStandUp = () => {
+    if (!table) return;
+    const isMyTurn = tableData?.currentTurn === mySeatIndex;
+    const isInHand = tableData?.playersInHand?.includes(mySeatIndex);
+
+    let message = "Are you sure you want to stand up?";
+    if (isInHand) {
+      message =
+        "You are currently in a hand! Standing up will FOLD your cards and your current bets will stay in the pot. Proceed?";
+    }
+
+    Alert.alert(
+      "Stand Up",
+      "Return your chips to your club gems and leave the seat?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Confirm",
+          onPress: () => {
+            socket.emit("standUp", {
+              tableId: tableId,
+              userId: profile.supabase_id,
+              clubId: table.clubId, // The clubId this table belongs to
+            });
+            router.back(); // Take user back to the Lobby
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleLeave}>
-          <Text style={styles.leaveText}>Leave</Text>
+        <TouchableOpacity style={styles.leaveBtn} onPress={handleStandUp}>
+          <Text style={styles.leaveBtnText}>❮ STAND UP</Text>
         </TouchableOpacity>
-
+        <TouchableOpacity
+          style={styles.topUpBtn}
+          onPress={() => setTopUpVisible(true)}
+        >
+          <Text style={styles.topUpText}>+ ADD CHIPS</Text>
+        </TouchableOpacity>
         <Text style={styles.tableTitle}>Table #{id?.slice(-4)}</Text>
 
         <TouchableOpacity
@@ -187,6 +239,9 @@ export default function PokerTable() {
           onPress={() => setIsHistoryVisible(true)}
         >
           <Text style={styles.historyBtnText}>History</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.menuBtn}>
+          <Text style={styles.menuIcon}>⚙️</Text>
         </TouchableOpacity>
       </View>
 
@@ -257,6 +312,15 @@ export default function PokerTable() {
           </View>
         )}
       </View>
+      <BuyInModal
+        visible={topUpVisible}
+        onClose={() => setTopUpVisible(false)}
+        onConfirm={handleTopUpConfirm}
+        tableMin={1} // Min can be as low as 1 gem
+        tableMax={Math.min(userClubBalance, maxPossibleTopUp)}
+        userBalance={userClubBalance}
+        title="TOP UP CHIPS"
+      />
 
       <HandHistory
         visible={isHistoryVisible}
@@ -308,7 +372,6 @@ export default function PokerTable() {
 }
 
 const styles = StyleSheet.create({
-  // ... (Keep your previous styles)
   container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     flexDirection: "row",
@@ -435,5 +498,16 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     borderWidth: 1,
     borderColor: "#333",
+  },
+  leaveBtn: {
+    backgroundColor: "#CC0000", // Red for "Exit"
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+  },
+  leaveBtnText: {
+    color: "#FFF",
+    fontWeight: "bold",
+    fontSize: 12,
   },
 });
